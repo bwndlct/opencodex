@@ -15,6 +15,7 @@ import {
   listOAuthProviders, resolveModelsAuthToken, startLoginFlow, upsertOAuthProvider,
 } from "./oauth/index";
 import { removeCredential } from "./oauth/store";
+import { listKeyLoginProviders } from "./oauth/key-providers";
 import type { OcxConfig, OcxProviderConfig } from "./types";
 
 const VERSION = "0.0.1";
@@ -296,6 +297,11 @@ async function handleManagementAPI(req: Request, url: URL, config: OcxConfig): P
   // Which providers support real OAuth login (drives the GUI's "Log in with …" buttons).
   if (url.pathname === "/api/oauth/providers" && req.method === "GET") {
     return jsonResponse({ providers: listOAuthProviders() });
+  }
+
+  // API-key "login" providers (open dashboard → paste key). Drives the GUI's key-provider picker.
+  if (url.pathname === "/api/key-providers" && req.method === "GET") {
+    return jsonResponse({ providers: listKeyLoginProviders() });
   }
 
   // OAuth login (xai now; anthropic/kimi in cycle 2). Starts the flow and returns the auth URL;

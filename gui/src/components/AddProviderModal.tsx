@@ -18,6 +18,8 @@ interface Preset {
   auth: "oauth" | "forward" | "key";
   /** OAuth registry id (for auth === "oauth"). */
   oauthProvider?: string;
+  /** Where to create/copy the API key (for auth === "key" catalog providers). */
+  dashboardUrl?: string;
   note?: string;
 }
 
@@ -63,6 +65,7 @@ export default function AddProviderModal({
   const [oauthSupported, setOauthSupported] = useState<string[]>([]);
   const [oauthBusy, setOauthBusy] = useState(false);
   const [oauthMsg, setOauthMsg] = useState("");
+  const [keyProviders, setKeyProviders] = useState<Preset[]>([]);
   const searchRef = useRef<HTMLInputElement>(null);
   const aliveRef = useRef(true);
 
@@ -76,13 +79,29 @@ export default function AddProviderModal({
   useEffect(() => {
     fetch(`${apiBase}/api/oauth/providers`).then(r => r.json()).then(d => setOauthSupported(d.providers ?? [])).catch(() => {});
   }, [apiBase]);
+  useEffect(() => {
+    fetch(`${apiBase}/api/key-providers`).then(r => r.json()).then((d: { providers?: Array<{ id: string; label: string; adapter: string; baseUrl: string; dashboardUrl?: string; defaultModel?: string }> }) => {
+      setKeyProviders((d.providers ?? []).map(p => ({
+        id: p.id, label: p.label, adapter: p.adapter, baseUrl: p.baseUrl, defaultModel: p.defaultModel, auth: "key" as const, dashboardUrl: p.dashboardUrl,
+      })));
+    }).catch(() => {});
+  }, [apiBase]);
+
+  // Static presets + catalog key-login providers (deduped by id, custom kept last).
+  const allPresets = useMemo(() => {
+    const ids = new Set(PRESETS.map(p => p.id));
+    const extra = keyProviders.filter(p => !ids.has(p.id));
+    const customIdx = PRESETS.findIndex(p => p.id === "custom");
+    if (customIdx < 0) return [...PRESETS, ...extra];
+    return [...PRESETS.slice(0, customIdx), ...extra, ...PRESETS.slice(customIdx)];
+  }, [keyProviders]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return PRESETS;
+    if (!q) return allPresets;
     // Match by provider name/id — not adapter, since most share "openai-chat" and would all match.
-    return PRESETS.filter(p => p.label.toLowerCase().includes(q) || p.id.toLowerCase().includes(q));
-  }, [query]);
+    return allPresets.filter(p => p.label.toLowerCase().includes(q) || p.id.toLowerCase().includes(q));
+  }, [query, allPresets]);
 
   const choosePreset = (p: Preset) => {
     setPreset(p);
@@ -246,9 +265,16 @@ export default function AddProviderModal({
                   No key needed — the proxy forwards your <code>codex login</code> credentials to this provider.
                 </div>
               ) : (
-                <Field label="API key">
-                  <input type="password" value={form.apiKey} onChange={e => setForm({ ...form, apiKey: e.target.value })} placeholder="sk-… (or $ENV_VAR)" style={input} />
-                </Field>
+                <>
+                  {preset.dashboardUrl && (
+                    <a href={preset.dashboardUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "#2563eb" }}>
+                      🔑 Get your {preset.label} API key ↗
+                    </a>
+                  )}
+                  <Field label="API key">
+                    <input type="password" value={form.apiKey} onChange={e => setForm({ ...form, apiKey: e.target.value })} placeholder="sk-… (or $ENV_VAR)" style={input} />
+                  </Field>
+                </>
               )}
               <Field label="Default model (optional)">
                 <input value={form.defaultModel} onChange={e => setForm({ ...form, defaultModel: e.target.value })} placeholder="e.g. gpt-5.5" style={input} />

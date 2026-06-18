@@ -220,6 +220,33 @@ async function handleManagementAPI(req: Request, url: URL, config: OcxConfig): P
     })));
   }
 
+  // Add (or overwrite) a single provider. Merges into the live in-memory config and
+  // persists — existing providers' real keys are never round-tripped (unlike PUT /api/config,
+  // which would re-save the masked keys from GET). Live routing picks it up immediately.
+  if (url.pathname === "/api/providers" && req.method === "POST") {
+    let body: { name?: string; provider?: OcxProviderConfig; setDefault?: boolean };
+    try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    const name = body.name?.trim();
+    const prov = body.provider;
+    if (!name || !prov?.adapter || !prov?.baseUrl) {
+      return jsonResponse({ error: "name, provider.adapter and provider.baseUrl are required" }, 400);
+    }
+    const { saveConfig: save } = await import("./config");
+    config.providers[name] = prov;
+    if (body.setDefault) config.defaultProvider = name;
+    save(config);
+    return jsonResponse({ success: true, name });
+  }
+
+  if (url.pathname === "/api/providers" && req.method === "DELETE") {
+    const name = url.searchParams.get("name")?.trim();
+    if (!name || !config.providers[name]) return jsonResponse({ error: "unknown provider" }, 404);
+    const { saveConfig: save } = await import("./config");
+    delete config.providers[name];
+    save(config);
+    return jsonResponse({ success: true });
+  }
+
   if (url.pathname === "/api/models" && req.method === "GET") {
     const models = await fetchAllModels(config);
     return jsonResponse(models.map(m => ({ ...m, namespaced: `${m.provider}/${m.id}` })));

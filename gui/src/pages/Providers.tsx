@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import AddProviderModal from "../components/AddProviderModal";
 
 interface Config {
   port: number;
@@ -9,6 +10,7 @@ interface Config {
 export default function Providers({ apiBase }: { apiBase: string }) {
   const [config, setConfig] = useState<Config | null>(null);
   const [editing, setEditing] = useState(false);
+  const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState("");
   const [status, setStatus] = useState("");
 
@@ -58,7 +60,10 @@ export default function Providers({ apiBase }: { apiBase: string }) {
               <button onClick={() => { setEditing(false); setDraft(JSON.stringify(config, null, 2)); }} style={btnStyle("#888")}>Cancel</button>
             </>
           ) : (
-            <button onClick={() => setEditing(true)} style={btnStyle("#3b82f6")}>Edit JSON</button>
+            <>
+              <button onClick={() => setAdding(true)} style={btnStyle("#3b82f6")}>Add Provider</button>
+              <button onClick={() => setEditing(true)} style={btnStyle("#9ca3af")}>Edit JSON</button>
+            </>
           )}
         </div>
       </div>
@@ -83,6 +88,14 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             </div>
           ))}
         </div>
+      )}
+      {adding && (
+        <AddProviderModal
+          apiBase={apiBase}
+          existingNames={Object.keys(config.providers)}
+          onClose={() => setAdding(false)}
+          onAdded={(name) => { setAdding(false); setStatus(`Added "${name}". Live now — run ocx sync (or restart) to list its models in Codex's picker.`); fetchConfig(); }}
+        />
       )}
     </div>
   );

@@ -31,6 +31,7 @@ jobs:
         uses: withastro/action@v3
         with:
           path: ./docs-site
+          node-version: 22 # Astro 6 requires Node >= 22.12.0 (the action defaults to 20)
           package-manager: bun@latest
 
   deploy:

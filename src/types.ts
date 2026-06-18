@@ -78,6 +78,8 @@ export interface OcxTool {
   strict?: boolean;
   /** MCP namespace (e.g. "mcp__context7") for tools flattened out of a Responses "namespace" tool. */
   namespace?: string;
+  /** Freeform/custom tool (e.g. apply_patch): the model's call must be relayed as a custom_tool_call. */
+  freeform?: boolean;
 }
 
 /**

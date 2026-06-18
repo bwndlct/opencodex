@@ -18,7 +18,14 @@ export function bridgeToResponsesSSE(
   events: AsyncIterable<AdapterEvent>,
   modelId: string,
   toolNsMap?: Map<string, { namespace: string; name: string }>,
+  freeformToolNames?: Set<string>,
 ): ReadableStream<Uint8Array> {
+  // Freeform/custom tools (apply_patch) carry their body in `input`; the model is given a
+  // function with `{input:string}`, so unwrap it here when relaying back as a custom_tool_call.
+  const freeformInput = (args: string): string => {
+    try { const o = JSON.parse(args); if (o && typeof o.input === "string") return o.input; } catch { /* raw */ }
+    return args;
+  };
   const encoder = new TextEncoder();
   const responseId = `resp_${uuid()}`;
   let seq = 0;
@@ -43,7 +50,7 @@ export function bridgeToResponsesSSE(
 
       let currentMsg: { itemId: string; outputIndex: number; text: string } | null = null;
       let currentReasoning: { itemId: string; outputIndex: number; text: string } | null = null;
-      let currentToolCall: { itemId: string; outputIndex: number; callId: string; name: string; args: string; namespace?: string } | null = null;
+      let currentToolCall: { itemId: string; outputIndex: number; callId: string; name: string; args: string; namespace?: string; freeform?: boolean } | null = null;
 
       const closeCurrentMessage = () => {
         if (!currentMsg) return;
@@ -71,12 +78,18 @@ export function bridgeToResponsesSSE(
 
       const closeCurrentToolCall = () => {
         if (!currentToolCall) return;
-        const item = {
-          type: "function_call", id: currentToolCall.itemId,
-          call_id: currentToolCall.callId, name: currentToolCall.name,
-          arguments: currentToolCall.args, status: "completed",
-          ...(currentToolCall.namespace ? { namespace: currentToolCall.namespace } : {}),
-        };
+        const item = currentToolCall.freeform
+          ? {
+              type: "custom_tool_call", id: currentToolCall.itemId,
+              call_id: currentToolCall.callId, name: currentToolCall.name,
+              input: freeformInput(currentToolCall.args), status: "completed",
+            }
+          : {
+              type: "function_call", id: currentToolCall.itemId,
+              call_id: currentToolCall.callId, name: currentToolCall.name,
+              arguments: currentToolCall.args, status: "completed",
+              ...(currentToolCall.namespace ? { namespace: currentToolCall.namespace } : {}),
+            };
         emit("response.output_item.done", { output_index: currentToolCall.outputIndex, item });
         finishedItems.push(item as OutputItem);
         outputIndex++;
@@ -137,22 +150,23 @@ export function bridgeToResponsesSSE(
               const mapped = toolNsMap?.get(event.name);
               const realName = mapped?.name ?? event.name;
               const ns = mapped?.namespace;
-              const item = {
-                type: "function_call", id: itemId, call_id: event.id,
-                name: realName, arguments: "", status: "in_progress",
-                ...(ns ? { namespace: ns } : {}),
-              };
+              const freeform = freeformToolNames?.has(realName) ?? false;
+              const item = freeform
+                ? { type: "custom_tool_call", id: itemId, call_id: event.id, name: realName, input: "", status: "in_progress" }
+                : { type: "function_call", id: itemId, call_id: event.id, name: realName, arguments: "", status: "in_progress", ...(ns ? { namespace: ns } : {}) };
               emit("response.output_item.added", { output_index: outputIndex, item });
-              currentToolCall = { itemId, outputIndex, callId: event.id, name: realName, args: "", namespace: ns };
+              currentToolCall = { itemId, outputIndex, callId: event.id, name: realName, args: "", namespace: ns, freeform };
               break;
             }
             case "tool_call_delta": {
               if (currentToolCall) {
                 currentToolCall.args += event.arguments;
-                emit("response.function_call_arguments.delta", {
-                  item_id: currentToolCall.itemId, output_index: currentToolCall.outputIndex,
-                  delta: event.arguments,
-                });
+                if (!currentToolCall.freeform) {
+                  emit("response.function_call_arguments.delta", {
+                    item_id: currentToolCall.itemId, output_index: currentToolCall.outputIndex,
+                    delta: event.arguments,
+                  });
+                }
               }
               break;
             }

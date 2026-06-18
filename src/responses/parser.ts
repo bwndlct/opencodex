@@ -92,8 +92,19 @@ function buildTools(tools: unknown[] | undefined): OcxTool[] | undefined {
         if (isObj(inner) && inner.type === "function" && typeof inner.name === "string") pushFn(inner, ns);
       }
     }
-    // custom (apply_patch), tool_search, web_search, image_generation are not representable as
-    // plain chat function tools and are intentionally dropped on this path.
+    else if (t.type === "custom" && typeof t.name === "string") {
+      // Freeform custom tool (e.g. apply_patch). Chat models can't emit a lark grammar, so expose a
+      // function with a single string `input` carrying the raw tool body; the bridge relays the model's
+      // call back as a custom_tool_call (Codex's freeform handler rejects a function_call → fatal abort).
+      out.push({
+        name: t.name,
+        description: (t.description as string) ?? "",
+        parameters: { type: "object", properties: { input: { type: "string", description: "Raw tool input (verbatim body, e.g. the apply_patch envelope)." } }, required: ["input"] },
+        freeform: true,
+      });
+    }
+    // tool_search, web_search, image_generation are hosted/client tools with no opencode.ai
+    // equivalent and are intentionally dropped on this path.
   }
   return out.length > 0 ? out : undefined;
 }

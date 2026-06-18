@@ -152,10 +152,12 @@ async function handleResponses(req: Request, config: OcxConfig, logCtx: { model:
     // Map flattened MCP tool names back to {namespace, name} so the bridge can restore the
     // namespace field Codex needs to route the call to the right MCP server.
     const toolNsMap = new Map<string, { namespace: string; name: string }>();
+    const freeformToolNames = new Set<string>();
     for (const t of parsed.context.tools ?? []) {
       if (t.namespace) toolNsMap.set(namespacedToolName(t.namespace, t.name), { namespace: t.namespace, name: t.name });
+      if (t.freeform) freeformToolNames.add(t.name);
     }
-    const sseStream = bridgeToResponsesSSE(eventStream, parsed.modelId, toolNsMap);
+    const sseStream = bridgeToResponsesSSE(eventStream, parsed.modelId, toolNsMap, freeformToolNames);
     return new Response(sseStream, {
       headers: {
         "Content-Type": "text/event-stream",

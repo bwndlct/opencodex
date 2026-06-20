@@ -43,6 +43,7 @@ export function bridgeToResponsesSSE(
   toolSearchToolNames?: Set<string>,
   onCancel?: () => void,
   heartbeatMs = 2_000,
+  options?: { responseId?: string },
 ): ReadableStream<Uint8Array> {
   // Freeform/custom tools (apply_patch) carry their body in `input`; the model is given a
   // function with `{input:string}`, so unwrap it here when relaying back as a custom_tool_call.
@@ -55,7 +56,7 @@ export function bridgeToResponsesSSE(
     try { const o = JSON.parse(args); return o && typeof o === "object" ? o : {}; } catch { return {}; }
   };
   const encoder = new TextEncoder();
-  const responseId = `resp_${uuid()}`;
+  const responseId = options?.responseId ?? `resp_${uuid()}`;
   let seq = 0;
   // Set once the client is gone (cancel) or an enqueue throws on a torn-down controller, so we
   // never enqueue again and never throw a second time inside start() — the RC2 double-throw that

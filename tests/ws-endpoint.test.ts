@@ -1,29 +1,41 @@
 import { describe, expect, test } from "bun:test";
-import { buildWarmupCompletionFrames, pumpSseToWebSocket, type WsData } from "../src/ws-bridge";
+import {
+  buildWarmupCompletionFrames,
+  pumpResponsesSseToWebSocket,
+  safeResponseHeaders,
+  selectForwardHeaders,
+  readBoundedPrefix,
+  sendResponsesJsonAsEvents,
+  sendResponseToWebSocket,
+  type WsData,
+} from "../src/ws-bridge";
 import type { ServerWebSocket } from "bun";
 
-function mockWs(): { ws: ServerWebSocket<WsData>; sent: string[] } {
+function mockWs(sendResult = 1): { ws: ServerWebSocket<WsData>; sent: string[] } {
   const sent: string[] = [];
   const ws = {
     readyState: 1,
     data: {} as WsData,
-    send: (m: string) => { sent.push(m); return 0; },
+    send: (m: string) => { sent.push(m); return sendResult; },
   } as unknown as ServerWebSocket<WsData>;
   return { ws, sent };
 }
 
-function sseStream(frames: string[]): ReadableStream<Uint8Array> {
+function sseStream(frames: string[], onCancel?: () => void): ReadableStream<Uint8Array> {
   const enc = new TextEncoder();
   return new ReadableStream<Uint8Array>({
     start(c) {
       for (const f of frames) c.enqueue(enc.encode(f));
       c.close();
     },
+    cancel() {
+      onCancel?.();
+    },
   });
 }
 
-describe("WS endpoint re-framer (120.2)", () => {
-  test("generate=false warmup completes locally without upstream", () => {
+describe("WS endpoint re-framer (120/132)", () => {
+  test("generate=false warmup completes locally without upstream and forces full next request", () => {
     const frames = buildWarmupCompletionFrames({ model: "gpt-5.5", generate: false }).map(f => JSON.parse(f));
 
     expect(frames).toHaveLength(2);
@@ -41,41 +53,199 @@ describe("WS endpoint re-framer (120.2)", () => {
     expect(frames[1].response.id).toBe("");
   });
 
-  test("re-frames SSE data payloads as WS Text and drops [DONE]", async () => {
+  test("re-frames SSE data payloads as WS Text and stops at the first terminal", async () => {
+    let cancelled = false;
     const { ws, sent } = mockWs();
-    await pumpSseToWebSocket(ws, sseStream([
+    await pumpResponsesSseToWebSocket(ws, sseStream([
       'event: response.created\ndata: {"type":"response.created","sequence_number":0}\n\n',
       'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"hi"}\n\n',
       'event: response.completed\ndata: {"type":"response.completed","response":{"id":"r1"}}\n\n',
-      "data: [DONE]\n\n",
-    ]));
-    expect(sent.length).toBe(3); // [DONE] dropped
-    expect(JSON.parse(sent[0]).type).toBe("response.created");
-    expect(JSON.parse(sent[2]).type).toBe("response.completed");
+      'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"stale"}\n\n',
+    ], () => { cancelled = true; }));
+    expect(sent.map(f => JSON.parse(f).type)).toEqual([
+      "response.created",
+      "response.output_text.delta",
+      "response.completed",
+    ]);
+    expect(cancelled).toBe(true);
   });
 
-  test("reassembles a frame split across chunks", async () => {
+  test("supports CRLF, multiline data, split chunks, and unterminated final events", async () => {
     const { ws, sent } = mockWs();
-    await pumpSseToWebSocket(ws, sseStream([
-      'event: response.created\ndata: {"type":"resp',
-      'onse.created","sequence_number":0}\n\n',
+    await pumpResponsesSseToWebSocket(ws, sseStream([
+      'event: response.created\r\ndata: {"type":"response.created",\r\ndata: "sequence_number":0}\r\n\r\n',
+      'event: response.completed\ndata: {"type":"response.completed","response":{"id":"r1"}}',
     ]));
-    expect(sent.length).toBe(1);
+    expect(sent).toHaveLength(2);
     expect(JSON.parse(sent[0]).type).toBe("response.created");
+    expect(JSON.parse(sent[1]).type).toBe("response.completed");
   });
 
-  test("wires a cancel hook that aborts the stream on client disconnect (RC2)", async () => {
+  test("emits standalone transport error when EOF arrives before a terminal event", async () => {
+    const { ws, sent } = mockWs();
+    await pumpResponsesSseToWebSocket(ws, sseStream([
+      'event: response.created\ndata: {"type":"response.created"}\n\n',
+    ]));
+    expect(JSON.parse(sent.at(-1)!).type).toBe("error");
+    expect(JSON.parse(sent.at(-1)!).status).toBe(502);
+  });
+
+  test("dropped websocket sends fail instead of silently passing", async () => {
+    const { ws } = mockWs(0);
+    await expect(pumpResponsesSseToWebSocket(ws, sseStream([
+      'event: response.completed\ndata: {"type":"response.completed","response":{"id":"r1"}}\n\n',
+    ]))).rejects.toThrow("websocket send dropped");
+  });
+
+  test("backpressured websocket sends are accepted", async () => {
+    const { ws, sent } = mockWs(-1);
+    await pumpResponsesSseToWebSocket(ws, sseStream([
+      'event: response.completed\ndata: {"type":"response.completed","response":{"id":"r1"}}\n\n',
+    ]));
+    expect(JSON.parse(sent[0]).type).toBe("response.completed");
+  });
+
+  test("wires a cancel hook that aborts the stream on client disconnect", async () => {
     const { ws } = mockWs();
     let cancelled = false;
     const stream = new ReadableStream<Uint8Array>({
       start() { /* never enqueues or closes until cancelled */ },
       cancel() { cancelled = true; },
     });
-    const pump = pumpSseToWebSocket(ws, stream);
-    // cancel is registered synchronously, before the first awaited read.
+    const pump = pumpResponsesSseToWebSocket(ws, stream);
     expect(typeof ws.data.cancel).toBe("function");
     ws.data.cancel!();
     await pump;
     expect(cancelled).toBe(true);
+  });
+
+  test("does not emit stale frames after a replacement turn invalidates the pump", async () => {
+    const { ws, sent } = mockWs();
+    let current = true;
+    const pump = pumpResponsesSseToWebSocket(ws, sseStream([
+      'event: response.created\ndata: {"type":"response.created"}\n\n',
+    ]), { isCurrent: () => current });
+    current = false;
+    ws.data.cancel?.();
+    await pump;
+    expect(sent).toEqual([]);
+  });
+
+  test("converts successful Responses JSON into output_item.done plus response.completed frames", () => {
+    const { ws, sent } = mockWs();
+    sendResponsesJsonAsEvents(ws, {
+      id: "resp_json",
+      object: "response",
+      status: "completed",
+      output: [{ type: "message", id: "msg_1", role: "assistant", status: "completed", content: [] }],
+    });
+    expect(sent.map(f => JSON.parse(f).type)).toEqual([
+      "response.created",
+      "response.output_item.done",
+      "response.completed",
+    ]);
+    expect(JSON.parse(sent[2]).response.id).toBe("resp_json");
+  });
+
+  test("stores only allowlisted inbound headers and emits only safe response headers", () => {
+    const inbound = new Headers({
+      authorization: "Bearer secret",
+      cookie: "session=secret",
+      "openai-beta": "responses=experimental",
+      "x-codex-turn-state": "turn",
+    });
+    const selected = selectForwardHeaders(inbound);
+    expect(selected.get("authorization")).toBe("Bearer secret");
+    expect(selected.get("openai-beta")).toBe("responses=experimental");
+    expect(selected.get("x-codex-turn-state")).toBe("turn");
+    expect(selected.get("cookie")).toBeNull();
+
+    const outbound = safeResponseHeaders(new Headers({
+      "retry-after": "2",
+      "set-cookie": "secret=1",
+      "x-ratelimit-remaining": "4",
+      "x-codex-turn-state": "state",
+    }));
+    expect(outbound).toEqual({
+      "retry-after": "2",
+      "x-codex-turn-state": "state",
+      "x-ratelimit-remaining": "4",
+    });
+  });
+
+  test("bounded sniffing replays the full body without dropping bytes", async () => {
+    const enc = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(enc.encode("abcdef"));
+        controller.close();
+      },
+    });
+    const { prefix, stream } = await readBoundedPrefix(body, 3);
+    expect(new TextDecoder().decode(prefix)).toBe("abc");
+    expect(await new Response(stream).text()).toBe("abcdef");
+  });
+
+  test("classifies labelled SSE responses", async () => {
+    const { ws, sent } = mockWs();
+    await sendResponseToWebSocket(ws, new Response(
+      'event: response.completed\ndata: {"type":"response.completed","response":{"id":"sse"}}\n\n',
+      { headers: { "content-type": "text/event-stream" } },
+    ), () => true);
+    expect(JSON.parse(sent[0]).type).toBe("response.completed");
+  });
+
+  test("sniffs mislabelled SSE responses", async () => {
+    const { ws, sent } = mockWs();
+    await sendResponseToWebSocket(ws, new Response(
+      'data: {"type":"response.completed","response":{"id":"mislabelled"}}\n\n',
+      { headers: { "content-type": "text/plain" } },
+    ), () => true);
+    expect(JSON.parse(sent[0]).response.id).toBe("mislabelled");
+  });
+
+  test("converts application/json 200 responses into event sequence", async () => {
+    const { ws, sent } = mockWs();
+    await sendResponseToWebSocket(ws, Response.json({
+      id: "json",
+      object: "response",
+      status: "completed",
+      output: [{ type: "message", id: "msg", role: "assistant", status: "completed", content: [] }],
+    }), () => true);
+    expect(sent.map(f => JSON.parse(f).type)).toEqual([
+      "response.created",
+      "response.output_item.done",
+      "response.completed",
+    ]);
+  });
+
+  test("unexpected successful HTML and empty 204 become standalone protocol errors", async () => {
+    const html = mockWs();
+    await sendResponseToWebSocket(html.ws, new Response("<html></html>", {
+      headers: { "content-type": "text/html" },
+    }), () => true);
+    expect(JSON.parse(html.sent.at(-1)!).type).toBe("error");
+
+    const empty = mockWs();
+    await sendResponseToWebSocket(empty.ws, new Response(null, { status: 204 }), () => true);
+    expect(JSON.parse(empty.sent.at(-1)!).type).toBe("error");
+  });
+
+  test("non-2xx responses use standalone error envelope with status and safe headers", async () => {
+    const { ws, sent } = mockWs();
+    await sendResponseToWebSocket(ws, Response.json({
+      error: { type: "rate_limit_exceeded", message: "retry later" },
+    }, {
+      status: 429,
+      headers: { "retry-after": "3", "set-cookie": "secret=1" },
+    }), () => true);
+    const error = JSON.parse(sent[0]);
+    expect(error).toMatchObject({
+      type: "error",
+      status: 429,
+      error: { type: "rate_limit_exceeded", message: "retry later" },
+      headers: { "retry-after": "3" },
+    });
+    expect(error.headers["set-cookie"]).toBeUndefined();
   });
 });

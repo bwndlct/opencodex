@@ -4,9 +4,17 @@ import { createAnthropicAdapter } from "./adapters/anthropic";
 import { createAzureAdapter } from "./adapters/azure";
 import { createGoogleAdapter } from "./adapters/google";
 import { createOpenAIChatAdapter } from "./adapters/openai-chat";
-import { createResponsesPassthroughAdapter, FORWARD_HEADERS } from "./adapters/openai-responses";
+import { createResponsesPassthroughAdapter } from "./adapters/openai-responses";
 import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse } from "./bridge";
-import { buildWarmupCompletionFrames, pumpSseToWebSocket, type WsData } from "./ws-bridge";
+import {
+  buildWarmupCompletionFrames,
+  buildWsErrorFrame,
+  selectForwardHeaders,
+  sendJsonFrame,
+  sendResponseToWebSocket,
+  sendTextFrame,
+  type WsData,
+} from "./ws-bridge";
 import type { ServerWebSocket } from "bun";
 import { DEFAULT_SUBAGENT_MODELS, loadConfig, saveConfig, websocketsEnabled } from "./config";
 import { parseRequest } from "./responses/parser";
@@ -88,7 +96,12 @@ export function resolveAdapter(providerConfig: OcxProviderConfig) {
   }
 }
 
-async function handleResponses(req: Request, config: OcxConfig, logCtx: { model: string; provider: string }): Promise<Response> {
+async function handleResponses(
+  req: Request,
+  config: OcxConfig,
+  logCtx: { model: string; provider: string },
+  options: { forceEmptyResponseId?: boolean } = {},
+): Promise<Response> {
   let body: unknown;
   try {
     body = await req.json();
@@ -215,7 +228,16 @@ async function handleResponses(req: Request, config: OcxConfig, logCtx: { model:
       if (t.freeform) freeformToolNames.add(t.name);
       if (t.toolSearch) toolSearchToolNames.add(t.name);
     }
-    const sseStream = bridgeToResponsesSSE(eventStream, parsed.modelId, toolNsMap, freeformToolNames, toolSearchToolNames, () => upstream.abort());
+    const sseStream = bridgeToResponsesSSE(
+      eventStream,
+      parsed.modelId,
+      toolNsMap,
+      freeformToolNames,
+      toolSearchToolNames,
+      () => upstream.abort(),
+      2_000,
+      options.forceEmptyResponseId ? { responseId: "" } : undefined,
+    );
     return new Response(sseStream, {
       headers: {
         "Content-Type": "text/event-stream",
@@ -527,7 +549,7 @@ export function startServer(port?: number) {
       // Responses WebSocket (phase 120.2). Codex upgrades the same /v1/responses path; auth is
       // handshake-time only, so capture inbound headers and thread them into the pipeline.
       if (url.pathname === "/v1/responses" && req.headers.get("upgrade")?.toLowerCase() === "websocket") {
-        if (server.upgrade(req, { data: { headers: req.headers } })) return undefined as unknown as Response;
+        if (server.upgrade(req, { data: { headers: selectForwardHeaders(req.headers) } })) return undefined as unknown as Response;
         return formatErrorResponse(426, "upgrade_required", "WebSocket upgrade failed");
       }
 
@@ -584,7 +606,7 @@ export function startServer(port?: number) {
       // Responses WebSocket data plane (phase 120.2). Re-frames the same SSE pipeline onto the
       // socket: parse response.create → run handleResponses unchanged → pump its SSE body as WS
       // Text frames. response.processed is a no-op ack. close() aborts the upstream (RC2 parity).
-      async message(ws: ServerWebSocket<WsData>, raw: string | Buffer) {
+      message(ws: ServerWebSocket<WsData>, raw: string | Buffer) {
         let frame: Record<string, unknown>;
         try {
           frame = JSON.parse(typeof raw === "string" ? raw : raw.toString()) as Record<string, unknown>;
@@ -593,43 +615,46 @@ export function startServer(port?: number) {
         }
         if (frame.type === "response.processed") return; // ack — no-op
         if (frame.type !== "response.create") return;
+
+        ws.data.cancel?.();
+        const turnId = (ws.data.turnId ?? 0) + 1;
+        ws.data.turnId = turnId;
+        const isCurrent = () => ws.data.turnId === turnId;
+
         if (frame.generate === false) {
           for (const payload of buildWarmupCompletionFrames(frame)) {
-            if (ws.readyState === 1) ws.send(payload);
+            if (!isCurrent()) return;
+            sendTextFrame(ws, payload);
           }
           return;
         }
+
         const payload: Record<string, unknown> = { ...frame };
         delete payload.type;
-        const logCtx = { model: "unknown", provider: "unknown" };
-        const fwd = new Headers({ "content-type": "application/json" });
-        for (const h of FORWARD_HEADERS) {
-          const v = ws.data.headers?.get(h);
-          if (v) fwd.set(h, v); // native passthrough auth is handshake-time only
-        }
-        const req = new Request("http://localhost/v1/responses", {
-          method: "POST",
-          headers: fwd,
-          body: JSON.stringify({ ...payload, stream: true }),
-        });
-        const response = await handleResponses(req, config, logCtx);
-        if (response.ok && response.body) {
-          await pumpSseToWebSocket(ws, response.body);
-          return;
-        }
-        // Non-SSE (error or non-stream) → wrap as a terminal WS frame.
-        const text = await response.text();
-        try {
-          const json = JSON.parse(text) as Record<string, unknown>;
-          if (response.ok) {
-            if (ws.readyState === 1) ws.send(JSON.stringify({ type: "response.completed", response: json }));
-            return;
+        void (async () => {
+          const logCtx = { model: "unknown", provider: "unknown" };
+          const fwd = new Headers({ "content-type": "application/json" });
+          ws.data.headers?.forEach((value, key) => fwd.set(key, value));
+          const req = new Request("http://localhost/v1/responses", {
+            method: "POST",
+            headers: fwd,
+            body: JSON.stringify({ ...payload, stream: true }),
+          });
+          try {
+            const response = await handleResponses(req, config, logCtx, { forceEmptyResponseId: true });
+            await sendResponseToWebSocket(ws, response, isCurrent);
+          } catch (err) {
+            if (!isCurrent()) return;
+            try {
+              sendJsonFrame(ws, buildWsErrorFrame(502, {
+                type: "proxy_error",
+                message: err instanceof Error ? err.message : String(err),
+              }));
+            } catch {
+              /* socket already gone or send dropped */
+            }
           }
-          const error = (json.error as Record<string, unknown>) ?? { message: text.slice(0, 500) };
-          if (ws.readyState === 1) ws.send(JSON.stringify({ type: "response.failed", response: { status: "failed", error } }));
-        } catch {
-          if (ws.readyState === 1) ws.send(JSON.stringify({ type: "response.failed", response: { status: "failed", error: { message: text.slice(0, 500) } } }));
-        }
+        })();
       },
       close(ws: ServerWebSocket<WsData>) {
         ws.data.cancel?.(); // RC2: abort the upstream when the client disconnects

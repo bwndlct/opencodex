@@ -386,7 +386,12 @@ export function parseRequest(body: unknown): OcxParsedRequest {
   const structuredOutput = detectStructuredOutput(data.text);
 
   return {
-    modelId: data.model, context, stream: data.stream === true, options, _rawBody: body,
+    modelId: data.model,
+    ...(data.previous_response_id ? { previousResponseId: data.previous_response_id } : {}),
+    context,
+    stream: data.stream === true,
+    options,
+    _rawBody: body,
     ...(webSearch ? { _webSearch: webSearch } : {}),
     ...(structuredOutput ? { _structuredOutput: true } : {}),
   };

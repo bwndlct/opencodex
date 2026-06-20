@@ -1,8 +1,48 @@
 import type { ServerWebSocket } from "bun";
+import { FORWARD_HEADERS } from "./adapters/openai-responses";
+
+const OPEN = 1;
+const TERMINAL_TYPES = new Set(["response.completed", "response.failed", "response.incomplete"]);
+const SAFE_RESPONSE_HEADER_EXACT = new Set([
+  "retry-after",
+  "x-request-id",
+  "openai-request-id",
+  "x-codex-turn-state",
+  "openai-model",
+  "x-models-etag",
+  "x-reasoning-included",
+]);
 
 export interface WsData {
-  headers?: Headers; // inbound upgrade headers, threaded into the pipeline (auth is handshake-time only)
-  cancel?: () => void; // cancels the in-flight stream reader on client disconnect (RC2 abort parity)
+  headers?: Headers; // selected inbound upgrade headers only; never store full cookies/handshake internals
+  cancel?: () => void; // cancels the in-flight stream reader/fetch
+  turnId?: number; // monotonically increasing per socket; prevents stale frames after replacement turns
+}
+
+export class WsSendDroppedError extends Error {
+  constructor() {
+    super("websocket send dropped the message");
+  }
+}
+
+export function selectForwardHeaders(headers: Headers): Headers {
+  const selected = new Headers();
+  for (const name of FORWARD_HEADERS) {
+    const value = headers.get(name);
+    if (value) selected.set(name, value);
+  }
+  return selected;
+}
+
+export function safeResponseHeaders(headers: Headers): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [name, value] of headers) {
+    const lower = name.toLowerCase();
+    if (SAFE_RESPONSE_HEADER_EXACT.has(lower) || lower.startsWith("x-ratelimit-")) {
+      out[lower] = value;
+    }
+  }
+  return out;
 }
 
 export function buildWarmupCompletionFrames(frame: Record<string, unknown>): string[] {
@@ -28,38 +68,278 @@ export function buildWarmupCompletionFrames(frame: Record<string, unknown>): str
   ];
 }
 
-// Re-frame the existing SSE bridge/passthrough output onto a WebSocket. The frames' JSON already
-// carries { type, sequence_number, ... }, so each is sent verbatim as a Text message. `[DONE]` is
-// dropped (the WS terminal is response.completed); response.heartbeat frames pass through and
-// re-arm Codex's idle timer (unknown type → ignored). Cancelling the reader on client disconnect
-// propagates to the bridge's cancel() → upstream abort.
-export async function pumpSseToWebSocket(
+export function sendTextFrame(ws: ServerWebSocket<WsData>, payload: string): void {
+  if (ws.readyState !== OPEN) throw new WsSendDroppedError();
+  const result = ws.send(payload);
+  if (result === 0) throw new WsSendDroppedError();
+  // Bun returns -1 when queued with backpressure. That is accepted; a later 0 is the hard failure.
+}
+
+export function sendJsonFrame(ws: ServerWebSocket<WsData>, payload: Record<string, unknown>): void {
+  sendTextFrame(ws, JSON.stringify(payload));
+}
+
+export function buildWsErrorFrame(
+  status: number,
+  error: Record<string, unknown>,
+  headers?: Headers,
+): Record<string, unknown> {
+  return {
+    type: "error",
+    status,
+    error,
+    headers: headers ? safeResponseHeaders(headers) : {},
+  };
+}
+
+function parseSseBlock(block: string): string | null {
+  const data: string[] = [];
+  for (const line of block.split(/\r?\n/)) {
+    if (line.startsWith("data:")) {
+      const value = line.slice(5);
+      data.push(value.startsWith(" ") ? value.slice(1) : value);
+    }
+  }
+  return data.length > 0 ? data.join("\n") : null;
+}
+
+function nextSseBlock(buffer: string): { block: string; rest: string } | null {
+  const match = buffer.match(/\r?\n\r?\n/);
+  if (!match || match.index === undefined) return null;
+  return {
+    block: buffer.slice(0, match.index),
+    rest: buffer.slice(match.index + match[0].length),
+  };
+}
+
+function payloadType(payload: string): string | null {
+  try {
+    const json = JSON.parse(payload) as { type?: unknown };
+    return typeof json.type === "string" ? json.type : null;
+  } catch {
+    return null;
+  }
+}
+
+function protocolError(message: string): Record<string, unknown> {
+  return {
+    type: "protocol_error",
+    code: "websocket_protocol_error",
+    message,
+  };
+}
+
+function sendProtocolError(ws: ServerWebSocket<WsData>, status: number, message: string): void {
+  sendJsonFrame(ws, buildWsErrorFrame(status, protocolError(message)));
+}
+
+export async function pumpResponsesSseToWebSocket(
   ws: ServerWebSocket<WsData>,
   sseStream: ReadableStream<Uint8Array>,
+  options: { isCurrent?: () => boolean } = {},
 ): Promise<void> {
   const reader = sseStream.getReader();
+  const isCurrent = options.isCurrent ?? (() => true);
   ws.data.cancel = () => {
     void reader.cancel().catch(() => {});
   };
+
   const decoder = new TextDecoder();
   let buffer = "";
+  let terminalSeen = false;
+
+  const handlePayload = (payload: string): boolean => {
+    if (!isCurrent()) return true;
+    if (payload === "[DONE]") return false;
+    const type = payloadType(payload);
+    if (!type) {
+      sendProtocolError(ws, 502, "Invalid JSON payload in upstream SSE frame");
+      return true;
+    }
+    if (terminalSeen) return true;
+    sendTextFrame(ws, payload);
+    if (TERMINAL_TYPES.has(type)) {
+      terminalSeen = true;
+      void reader.cancel().catch(() => {});
+      return true;
+    }
+    return false;
+  };
+
   try {
-    while (true) {
+    while (!terminalSeen) {
       const { done, value } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
-      let idx: number;
-      while ((idx = buffer.indexOf("\n\n")) !== -1) {
-        const frame = buffer.slice(0, idx);
-        buffer = buffer.slice(idx + 2);
-        const dataLine = frame.split("\n").find(l => l.startsWith("data: "));
-        if (!dataLine) continue;
-        const payload = dataLine.slice(6);
-        if (payload === "[DONE]") continue; // WS terminal is response.completed
-        if (ws.readyState === 1 /* OPEN */) ws.send(payload);
+      let next: { block: string; rest: string } | null;
+      while ((next = nextSseBlock(buffer))) {
+        buffer = next.rest;
+        const payload = parseSseBlock(next.block);
+        if (payload && handlePayload(payload)) break;
       }
     }
+    buffer += decoder.decode();
+    if (!terminalSeen && buffer.trim()) {
+      const payload = parseSseBlock(buffer);
+      if (payload) handlePayload(payload);
+    }
+    if (!terminalSeen && isCurrent()) {
+      sendProtocolError(ws, 502, "Upstream stream ended before response terminal event");
+    }
+  } catch (err) {
+    if (!terminalSeen && isCurrent() && ws.readyState === OPEN) {
+      sendProtocolError(ws, 502, err instanceof Error ? err.message : String(err));
+    }
   } finally {
-    ws.data.cancel = undefined;
+    if (ws.data.cancel) ws.data.cancel = undefined;
   }
+}
+
+export function sendResponsesJsonAsEvents(
+  ws: ServerWebSocket<WsData>,
+  response: Record<string, unknown>,
+): void {
+  const output = Array.isArray(response.output) ? response.output : [];
+  sendJsonFrame(ws, {
+    type: "response.created",
+    response: { ...response, status: "in_progress", output: [] },
+  });
+  output.forEach((item, outputIndex) => {
+    sendJsonFrame(ws, {
+      type: "response.output_item.done",
+      output_index: outputIndex,
+      item,
+    });
+  });
+  sendJsonFrame(ws, {
+    type: "response.completed",
+    response: { ...response, status: "completed" },
+  });
+}
+
+function errorPayloadFromText(text: string): Record<string, unknown> {
+  try {
+    const json = JSON.parse(text) as { error?: unknown };
+    if (json.error && typeof json.error === "object" && !Array.isArray(json.error)) {
+      return json.error as Record<string, unknown>;
+    }
+  } catch {
+    /* fall through */
+  }
+  return {
+    type: "upstream_error",
+    message: text ? text.slice(0, 500) : "Upstream request failed",
+  };
+}
+
+export async function sendResponseToWebSocket(
+  ws: ServerWebSocket<WsData>,
+  response: Response,
+  isCurrent: () => boolean,
+): Promise<void> {
+  if (!isCurrent()) return;
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    if (!isCurrent()) return;
+    sendJsonFrame(ws, buildWsErrorFrame(response.status, errorPayloadFromText(text), response.headers));
+    return;
+  }
+
+  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+  if (!response.body) {
+    sendJsonFrame(ws, buildWsErrorFrame(502, {
+      type: "protocol_error",
+      code: "websocket_protocol_error",
+      message: `Unexpected successful upstream response without a body (${response.status})`,
+    }, response.headers));
+    return;
+  }
+
+  if (contentType.includes("text/event-stream")) {
+    await pumpResponsesSseToWebSocket(ws, response.body, { isCurrent });
+    return;
+  }
+
+  if (contentType.includes("application/json")) {
+    const text = await response.text();
+    if (!isCurrent()) return;
+    const json = JSON.parse(text) as Record<string, unknown>;
+    sendResponsesJsonAsEvents(ws, json);
+    return;
+  }
+
+  const { prefix, stream } = await readBoundedPrefix(response.body);
+  if (!isCurrent()) return;
+  if (looksLikeSse(prefix)) {
+    await pumpResponsesSseToWebSocket(ws, stream, { isCurrent });
+    return;
+  }
+
+  const text = await new Response(stream).text();
+  if (!isCurrent()) return;
+  const trimmed = text.trim();
+  if (trimmed.startsWith("{")) {
+    const json = JSON.parse(trimmed) as Record<string, unknown>;
+    sendResponsesJsonAsEvents(ws, json);
+    return;
+  }
+
+  sendJsonFrame(ws, buildWsErrorFrame(502, {
+    type: "protocol_error",
+    code: "websocket_protocol_error",
+    message: `Unexpected successful non-SSE upstream response (${contentType || "missing content-type"})`,
+  }, response.headers));
+}
+
+export async function readBoundedPrefix(
+  body: ReadableStream<Uint8Array>,
+  maxBytes = 4096,
+): Promise<{ prefix: Uint8Array; stream: ReadableStream<Uint8Array> }> {
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let remainder: Uint8Array | undefined;
+  let total = 0;
+  while (total < maxBytes) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const take = Math.min(value.byteLength, maxBytes - total);
+    if (take > 0) {
+      chunks.push(value.slice(0, take));
+      total += take;
+    }
+    if (take < value.byteLength) {
+      remainder = value.slice(take);
+      break;
+    }
+  }
+  const prefix = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    prefix.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      if (prefix.byteLength > 0) controller.enqueue(prefix);
+      if (remainder && remainder.byteLength > 0) controller.enqueue(remainder);
+    },
+    async pull(controller) {
+      const { done, value } = await reader.read();
+      if (done) {
+        controller.close();
+        return;
+      }
+      controller.enqueue(value);
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
+  return { prefix, stream };
+}
+
+export function looksLikeSse(prefix: Uint8Array): boolean {
+  const text = new TextDecoder().decode(prefix);
+  return /^\s*(event:|data:)/.test(text);
 }

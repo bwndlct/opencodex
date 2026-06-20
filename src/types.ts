@@ -1,5 +1,6 @@
 export interface OcxParsedRequest {
   modelId: string;
+  previousResponseId?: string;
   context: OcxContext;
   stream: boolean;
   options: OcxRequestOptions;

@@ -38,6 +38,25 @@ bun install --frozen-lockfile
 bun run build
 ```
 
+## CI와 릴리즈
+
+GitHub Actions는 의도적으로 짧게 유지합니다:
+
+- **Cross-platform CI**(`.github/workflows/ci.yml`)는 런타임, 테스트, 패키지, 스크립트,
+  TypeScript, 워크플로 파일이 바뀐 pull request와 `main` push에서 실행됩니다. Linux와 Windows에서
+  install, typecheck, tests, release helper build smoke, `ocx help`를 검증합니다.
+- **Release**(`.github/workflows/release.yml`)는 수동 실행만 허용합니다. Release는 두 번째 전체 CI
+  파이프라인이 아니라, dry-run 또는 publish 전에 정확한 릴리즈 커밋(`GITHUB_SHA`)에 성공한
+  Cross-platform CI run이 있는지 확인하는 배포 게이트입니다.
+
+릴리즈에는 helper를 사용하세요:
+
+```bash
+bun run release <version>           # 기본은 dry-run
+bun run release <version> --publish # CI-gated dry-run을 확인한 뒤 실제 publish
+bun run release:watch               # 가장 최근 Release workflow run 감시
+```
+
 ## 컨벤션
 
 - **ES Modules 전용**(`import`/`export`), TypeScript, `strict` 모드. `bun x tsc --noEmit`을 깨끗하게

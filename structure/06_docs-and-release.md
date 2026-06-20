@@ -27,6 +27,18 @@ bun install --frozen-lockfile
 bun run build
 ```
 
+## GitHub workflow map
+
+| Workflow | Trigger | Purpose |
+| --- | --- | --- |
+| `.github/workflows/ci.yml` | `pull_request`, `push` to `main`, or manual dispatch when runtime/package paths change | Short Linux + Windows quality gate for runtime and release-helper changes. |
+| `.github/workflows/release.yml` | Manual dispatch only | npm publish/dry-run workflow. It requires the exact `GITHUB_SHA` to have a successful Cross-platform CI run before publish or dry-run. |
+| `.github/workflows/deploy-docs.yml` | `push` to `main` touching `docs-site/**` or the workflow, or manual dispatch | Build and publish the Astro/Starlight docs site to GitHub Pages. |
+
+Docs-only changes intentionally route through the docs workflow instead of the runtime CI gate. If a
+docs change also edits runtime/package/release files, run the relevant local runtime checks before
+push and let `ci.yml` provide the Linux/Windows confirmation.
+
 ## Root README
 
 The root READMEs are the concise product entrypoint. They should explain what opencodex does, how to

@@ -38,6 +38,25 @@ bun install --frozen-lockfile
 bun run build
 ```
 
+## CI and releases
+
+GitHub Actions intentionally stay small:
+
+- **Cross-platform CI** (`.github/workflows/ci.yml`) runs on pull requests and `main` pushes that
+  touch runtime, tests, package, script, TypeScript, or workflow files. It verifies Linux and Windows
+  with install, typecheck, tests, a release-helper build smoke, and `ocx help`.
+- **Release** (`.github/workflows/release.yml`) is manual. It does not act as a second full CI
+  pipeline; before dry-run or publish it requires the exact release commit (`GITHUB_SHA`) to already
+  have a successful Cross-platform CI run.
+
+Use the helper for releases:
+
+```bash
+bun run release <version>           # dry-run by default
+bun run release <version> --publish # publish after the CI-gated dry run is understood
+bun run release:watch               # watch the newest Release workflow run
+```
+
 ## Conventions
 
 - **ES Modules only** (`import`/`export`), TypeScript, `strict` mode. Keep `bun x tsc --noEmit` clean.

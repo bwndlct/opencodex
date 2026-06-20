@@ -7,6 +7,7 @@ import { contentPartsToText } from "./image";
 function messagesToChatFormat(parsed: OcxParsedRequest): unknown[] {
   const out: unknown[] = [];
   const { context, options } = parsed;
+  let pendingToolCallIds = new Set<string>();
 
   if (context.systemPrompt && context.systemPrompt.length > 0) {
     // Codex sends its GPT-5 identity prompt for EVERY model (the per-model catalog
@@ -39,6 +40,7 @@ function messagesToChatFormat(parsed: OcxParsedRequest): unknown[] {
             out.push({ role: "user", content: chatParts });
           }
         }
+        pendingToolCallIds = new Set();
         break;
       }
       case "assistant": {
@@ -61,20 +63,45 @@ function messagesToChatFormat(parsed: OcxParsedRequest): unknown[] {
         // like DeepSeek reject an assistant message with neither content nor tool_calls.
         if (chatMsg.content === undefined && chatMsg.tool_calls === undefined) break;
         out.push(chatMsg);
+        pendingToolCallIds = new Set(toolCalls.map(tc => tc.id).filter(Boolean));
         break;
       }
       case "toolResult": {
+        let toolCallId = msg.toolCallId;
+        if (!toolCallId) toolCallId = `call_orphan_${out.length}`;
+        if (!pendingToolCallIds.has(toolCallId)) {
+          // WS turns can arrive with only tool outputs; chat-completions providers reject a bare
+          // role:"tool" message unless an assistant tool_call with the same id immediately precedes it.
+          const name = safeToolName(msg.toolName);
+          out.push({
+            role: "assistant",
+            content: null,
+            tool_calls: [{
+              id: toolCallId,
+              type: "function",
+              function: { name, arguments: "{}" },
+            }],
+          });
+          pendingToolCallIds = new Set([toolCallId]);
+        }
         out.push({
           role: "tool",
-          tool_call_id: msg.toolCallId,
+          tool_call_id: toolCallId,
           content: contentPartsToText(msg.content),
         });
+        pendingToolCallIds.delete(toolCallId);
         break;
       }
     }
   }
 
   return out;
+}
+
+function safeToolName(name: string | undefined): string {
+  const raw = name && name.trim().length > 0 ? name : "tool_result";
+  const sanitized = raw.replace(/[^A-Za-z0-9_-]/g, "_");
+  return sanitized.length > 0 ? sanitized : "tool_result";
 }
 
 function toolsToChatFormat(parsed: OcxParsedRequest): unknown[] | undefined {

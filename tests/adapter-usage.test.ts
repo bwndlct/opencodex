@@ -130,3 +130,84 @@ describe("usage and content retention (F2)", () => {
     expect(dones[0]).toEqual({ type: "done", usage: { inputTokens: 4, outputTokens: 2 } });
   });
 });
+
+describe("openai-chat tool history repair", () => {
+  test("inserts a synthetic assistant tool_call before orphan tool results", () => {
+    const adapter = createOpenAIChatAdapter(provider);
+    const request = adapter.buildRequest({
+      modelId: "deepseek-v4",
+      context: {
+        messages: [{
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "codex.list_mcp_resources",
+          content: '{"resources":[]}',
+          isError: false,
+          timestamp: 0,
+        }],
+      },
+      stream: true,
+      options: {},
+    });
+    const body = JSON.parse(request.body) as { messages: Record<string, unknown>[] };
+
+    expect(body.messages).toHaveLength(2);
+    expect(body.messages[0]).toMatchObject({
+      role: "assistant",
+      content: null,
+      tool_calls: [{
+        id: "call_1",
+        type: "function",
+        function: { name: "codex_list_mcp_resources", arguments: "{}" },
+      }],
+    });
+    expect(body.messages[1]).toMatchObject({
+      role: "tool",
+      tool_call_id: "call_1",
+      content: '{"resources":[]}',
+    });
+  });
+
+  test("keeps paired tool results attached to the prior assistant tool_call", () => {
+    const adapter = createOpenAIChatAdapter(provider);
+    const request = adapter.buildRequest({
+      modelId: "deepseek-v4",
+      context: {
+        messages: [
+          {
+            role: "assistant",
+            content: [{
+              type: "toolCall",
+              id: "call_1",
+              name: "read_file",
+              arguments: { path: "README.md" },
+            }],
+            model: "deepseek-v4",
+            timestamp: 0,
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "read_file",
+            content: "contents",
+            isError: false,
+            timestamp: 0,
+          },
+        ],
+      },
+      stream: true,
+      options: {},
+    });
+    const body = JSON.parse(request.body) as { messages: Record<string, unknown>[] };
+
+    expect(body.messages).toHaveLength(2);
+    expect(body.messages[0]).toMatchObject({
+      role: "assistant",
+      tool_calls: [{
+        id: "call_1",
+        function: { name: "read_file", arguments: '{"path":"README.md"}' },
+      }],
+    });
+    expect(body.messages[1]).toMatchObject({ role: "tool", tool_call_id: "call_1" });
+  });
+});

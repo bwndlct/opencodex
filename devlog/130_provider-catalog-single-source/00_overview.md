@@ -7,10 +7,10 @@ that are supposed to stay aligned but are edited independently. When they drift,
 provider in the GUI that `ocx init` cannot offer, or a configured provider that never receives
 bundled jawcode model metadata in the Codex catalog.
 
-This phase is **planning only** (docs 00–02). It inventories every catalog entry across the
-three surfaces, documents the two hotfixed drift bugs from this work cycle as motivating
-symptoms, and designs a single-source-of-truth registry with an incremental migration path and
-a CI drift guard. **No production code changes** in this cycle.
+Docs 00–02 inventory every catalog entry across the three surfaces, document the two hotfixed
+drift bugs from this work cycle as motivating symptoms, and design a single-source-of-truth
+registry with an incremental migration path and a CI drift guard. Docs 10–30 record the Phase
+130 implementation that followed.
 
 ## Symptom (motivating bugs — already hotfixed)
 
@@ -86,3 +86,7 @@ the three is derived from a shared canonical list today.
 | `00_overview.md` | This file — framing, hotfix symptoms, parity contract, scope |
 | `01_catalog-source-audit.md` | Surface-by-surface map + **complete divergence matrix** |
 | `02_single-source-design.md` | Canonical registry shape, per-consumer derivation, migration, CI guard, risks |
+| `03_implementation-plan.md` | Confirmed implementation decisions and file-level plan |
+| `10_registry-scaffold.md` | Registry and projection scaffold implementation record |
+| `20_wiring-and-compat.md` | Consumer wiring, compatibility aliases, and GUI/runtime integration record |
+| `30_verification.md` | Final verification evidence and residual risk notes |

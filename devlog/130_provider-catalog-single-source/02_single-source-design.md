@@ -23,12 +23,13 @@ Non-goals: changing jawcode `models.json`; auto-adding metadata for all 31 key-l
 
 ```
 src/providers/registry.ts          ← authoring surface (TypeScript for types + comments)
-src/providers/registry.types.ts    ← shared types (optional split if registry grows)
+src/providers/derive.ts            ← runtime projections for CLI/API/OAuth/metadata
 ```
 
-Keep the registry **under `src/providers/`** (not `gui/`) so CLI, server, GUI bundler, and
-`scripts/generate-jawcode-metadata.ts` can import without crossing package boundaries. The GUI
-imports the same module at build time (Vite already compiles from repo root).
+Keep the registry **under `src/providers/`** (not `gui/`) so CLI, server, OAuth, and
+`scripts/generate-jawcode-metadata.ts` can import it directly. The GUI is a standalone Vite
+package scoped to `gui/src`, so it must consume a server projection (`GET /api/provider-presets`)
+instead of importing repo-root `src/providers/*` at build time.
 
 Alternative considered: JSON (`providers.json`) — rejected for phase 1 because entries need
 inline comments (dashboard URLs, exclusion rationale mirroring `key-providers.ts:66-69`) and
@@ -66,7 +67,7 @@ export interface ProviderRegistryEntry {
    * Optional normalizer for metadata lookup when live /models ids differ from jawcode ids
    * (minimax CamelCase vs lowercase). Applied in applyJawcodeCatalogMetadata before getJawcodeModelMetadata.
    */
-  metadataModelIdNormalize?: "minimax-casefold" | "none";
+  metadataModelIdNormalize?: "case-insensitive";
 }
 ```
 
@@ -98,22 +99,12 @@ static providerConfig seeds; `OAUTH_PROVIDERS` becomes a thin map of handlers ke
 
 ### 1 — GUI (`AddProviderModal.tsx`)
 
-**Target behavior**
+**Target behavior:** the server exposes a registry-derived `GET /api/provider-presets` endpoint,
+and the GUI uses that runtime shape for the add-provider picker. This keeps the standalone GUI
+package isolated from repo-root TypeScript while still removing the hardcoded `PRESETS` list.
 
-```ts
-import { listFeaturedProviders, listKeyProviders } from "../providers/derive";
-
-const PRESETS = listFeaturedProviders();           // replaces hardcoded array :29-43
-const keyProviders = listKeyProviders();           // replaces /api/key-providers fetch OR mirrors it
-```
-
-| Mode | Behavior |
-|------|----------|
-| **Build-time (preferred)** | Import derived featured list directly — GUI works offline with full parity |
-| **Runtime API (optional)** | Keep `GET /api/key-providers` as `listKeyLoginProviders()` wrapper for backwards compat |
-
-Merge logic (`allPresets` `:94-100`) becomes: `featured + keyCatalog − duplicates + custom`,
-or simply `listAllSelectableProviders()` from registry.
+Merge logic (`allPresets` `:94-100`) becomes unnecessary because the endpoint returns the final
+selectable list: `featured + key catalog − duplicates + custom`.
 
 **OAuth presets:** derive from `authKind === "oauth"` rows; `oauthProvider` = `oauthId ?? id`.
 **Fixes live mismatches** by reading single `baseUrl` / `defaultModel` for `kimi` and `anthropic`.
@@ -180,7 +171,7 @@ This addresses the casing fragility independent of jawcode id renames.
 | **M1 — Registry scaffold** | Add `registry.ts` with all 43+ rows transcribed from current sources; **no consumer changes** | Low | Delete new files |
 | **M2 — Drift guard (read-only)** | Test compares registry projections to legacy exports; **fails on current mismatches** until M3 fixes fields | None (test-only) | Skip test in CI temporarily |
 | **M3 — Wire CLI + API** | `KEY_LOGIN_PROVIDERS`, `buildInitProviders`, `/api/key-providers` import derived maps; fix `kimi`/`anthropic`/`azure-openai` fields in registry | Medium | Revert imports |
-| **M4 — Wire GUI** | Replace static `PRESETS`; remove fetch dependency or keep as cache | Medium UI | Revert component |
+| **M4 — Wire GUI** | Replace static `PRESETS` with `/api/provider-presets`; keep a minimal custom fallback if the proxy request fails | Medium UI | Revert component |
 | **M5 — Metadata pipeline** | Generator reads `jawcodeBundle` from registry; add model-id normalizer in `codex-catalog.ts` | Medium catalog | Regenerate old metadata |
 | **M6 — Delete duplicates** | Remove hardcoded `init.ts:48-52` block comments; strip legacy alias object from generator | Low | — |
 
@@ -216,8 +207,9 @@ describe("provider registry parity", () => {
     expect(deriveJawcodeAliases(REGISTRY)).toEqual(readGeneratedAliases());
   });
 
-  it("featured GUI ids are a subset of registry featured rows", () => {
-    expect(new Set(deriveFeaturedIds(REGISTRY))).toEqual(new Set(PRESET_IDS_EXCL_CUSTOM));
+  it("featured GUI ids are a registry projection", () => {
+    expect(deriveProviderPresets().map(p => p.id).at(-1)).toBe("custom");
+    expect(new Set(deriveFeaturedIds(REGISTRY))).toEqual(new Set(EXPECTED_FEATURED_IDS));
   });
 });
 ```
@@ -251,13 +243,13 @@ and fail if registry changes without snapshot update (prevents drive-by edits).
    key-login export, and metadata aliases when `jawcodeBundle` set.
 4. `minimax/minimax-m2.5` catalog slug receives metadata (context window) after normalizer ships.
 
-## Open decisions (resolve in M1 kickoff)
+## Decisions resolved before implementation
 
-1. **Canonical Azure adapter:** `azure` (init today) vs `azure-openai` (GUI today) — recommend
-   `azure` in registry, GUI select option value maps both during transition.
-2. **Kimi OAuth baseUrl:** confirm `api.kimi.com/coding/v1` vs `api.moonshot.ai/v1` with product
-   intent — registry should encode the **OAuth** endpoint; `moonshot` row keeps Moonshot API key path.
-3. **Featured set:** exact 13 static presets today, or drop rarely-used rows from quick-pick only?
+1. **Canonical Azure adapter:** `azure-openai`; `azure` remains accepted as a legacy compatibility
+   alias in the server adapter resolver.
+2. **Kimi OAuth baseUrl:** `https://api.kimi.com/coding/v1`; `moonshot` remains a separate API-key
+   provider row.
+3. **Featured set:** preserve the exact 13 non-custom static presets from the pre-130 GUI picker.
 
 ---
 

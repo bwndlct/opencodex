@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Switch, Notice } from "../ui";
 import { IconChevron, IconBoxes } from "../icons";
 
@@ -12,6 +12,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
   const [ok, setOk] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
 
   const load = async () => {
     try {
@@ -24,7 +25,14 @@ export default function Models({ apiBase }: { apiBase: string }) {
       setLoading(false);
     }
   };
-  useEffect(() => { load(); }, [apiBase]);
+  useEffect(() => {
+    load();
+    // Provider models resolve lazily (live /models + OAuth tokens), so a provider that wasn't ready
+    // on first load (e.g. anthropic right after login) would otherwise stay missing until a manual
+    // remove/re-add. Re-poll to pick it up; skip while a toggle PUT is in flight to avoid clobbering.
+    const t = setInterval(() => { if (!busyRef.current) load(); }, 10000);
+    return () => clearInterval(t);
+  }, [apiBase]);
 
   const groups = useMemo(() => {
     const g: Record<string, ModelRow[]> = {};
@@ -34,6 +42,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
 
   const apply = async (next: Set<string>) => {
     setBusy(true);
+    busyRef.current = true;
     setStatus("");
     try {
       const r = await fetch(`${apiBase}/api/disabled-models`, {
@@ -47,6 +56,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
       setOk(false); setStatus("Network error — is the proxy running?");
     } finally {
       setBusy(false);
+      busyRef.current = false;
     }
   };
 

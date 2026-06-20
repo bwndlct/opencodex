@@ -24,6 +24,15 @@ function nativeTemplate(): Record<string, unknown> {
   };
 }
 
+const EXPECTED_KEY_PROVIDER_IDS = [
+  "openai-apikey", "opencode-go", "openrouter", "groq", "google", "azure-openai",
+  "deepseek", "cerebras", "together", "fireworks", "firepass", "moonshot",
+  "huggingface", "nvidia", "venice", "zai", "nanogpt", "synthetic", "qwen-portal",
+  "qianfan", "alibaba", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
+  "minimax", "minimax-cn", "kimi-code", "opencode-zen", "vercel-ai-gateway",
+  "xiaomi", "kilo", "cloudflare-ai-gateway", "github-copilot", "gitlab-duo",
+];
+
 describe("provider registry parity", () => {
   test("registry ids are unique", () => {
     const ids = PROVIDER_REGISTRY.map(entry => entry.id);
@@ -32,7 +41,8 @@ describe("provider registry parity", () => {
 
   test("key-login export is derived from the registry", () => {
     expect(KEY_LOGIN_PROVIDERS).toEqual(deriveKeyLoginMap());
-    expect(Object.keys(KEY_LOGIN_PROVIDERS)).toContain("opencode-go");
+    expect(Object.keys(KEY_LOGIN_PROVIDERS)).toEqual(EXPECTED_KEY_PROVIDER_IDS);
+    expect(Object.keys(deriveKeyLoginMap())).toEqual(EXPECTED_KEY_PROVIDER_IDS);
     expect(KEY_LOGIN_PROVIDERS.minimax.defaultModel).toBe("MiniMax-M2.5");
   });
 

@@ -27,6 +27,20 @@ The implementation keeps existing public surfaces while replacing their authorin
 | `resolveJawcodeProvider()` | Still generated and exported from `src/generated/jawcode-model-metadata.ts`. |
 | `getJawcodeModelMetadata()` | Still generated and exported with exact lookup behavior. |
 
+## `/api/key-providers` set expansion
+
+The `/api/key-providers` response shape is preserved, but its id set intentionally expands from
+the old dedicated key-login map to every registry row with `authKind: "key"`. That brings the
+featured key providers that were previously GUI-static/init-hardcoded only into the key-provider
+catalog too:
+
+| Newly included key ids | Why |
+|------------------------|-----|
+| `openai-apikey`, `openrouter`, `groq`, `google`, `azure-openai` | These are real API-key providers and now share the same registry projection as the rest of the key catalog. |
+
+The parity test freezes the full key-provider id set so this public endpoint cannot expand or
+shrink silently after Phase 130.
+
 ## Legacy Azure alias
 
 The canonical registry value is `adapter: "azure-openai"`. Existing saved configs may still contain
@@ -58,6 +72,10 @@ and notes when present. `custom` stays last.
 
 The GUI uses this endpoint because importing repo-root `src/providers/*` into the standalone Vite
 package would cross its configured TypeScript boundary.
+
+If `/api/provider-presets` is unavailable, the modal falls back only to `custom`. That is a
+deliberate tradeoff: keeping the old 13 static presets in the GUI would preserve a second authored
+catalog and reintroduce the drift Phase 130 removes.
 
 ## Metadata normalization
 

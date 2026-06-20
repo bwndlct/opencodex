@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { IconAlert, IconCheck, IconX } from "../icons";
+import { useEffect, useMemo, useState } from "react";
+import { IconAlert } from "../icons";
 
 interface HealthData { status: string; version: string; uptime: number }
 interface ProviderInfo { name: string; adapter: string; baseUrl: string; defaultModel?: string; hasApiKey: boolean }
@@ -40,6 +40,13 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
       .catch(() => setModelsLoading(false));
   }, [apiBase, error]);
 
+  // Group models by provider so the list reads as provider → its models, not one flat wall of cards.
+  const grouped = useMemo(() => {
+    const g: Record<string, ModelInfo[]> = {};
+    for (const m of models) (g[m.provider] ??= []).push(m);
+    return Object.entries(g).sort(([a], [b]) => a.localeCompare(b));
+  }, [models]);
+
   if (error) {
     return (
       <div className="empty" style={{ marginTop: 40 }}>
@@ -75,7 +82,7 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
       ) : (
         <div className="tbl-wrap">
           <table className="tbl">
-            <thead><tr><th>Name</th><th>Adapter</th><th>Base URL</th><th>Model</th><th>Auth</th></tr></thead>
+            <thead><tr><th>Name</th><th>Adapter</th><th>Base URL</th><th>Model</th></tr></thead>
             <tbody>
               {providers.map(p => (
                 <tr key={p.name}>
@@ -83,9 +90,6 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
                   <td><span className="chip">{p.adapter}</span></td>
                   <td className="muted mono" style={{ fontSize: 12 }}>{p.baseUrl}</td>
                   <td className="muted">{p.defaultModel ?? "—"}</td>
-                  <td>{p.hasApiKey
-                    ? <IconCheck style={{ width: 16, height: 16, color: "var(--green)" }} aria-label="key configured" />
-                    : <IconX style={{ width: 16, height: 16, color: "var(--faint)" }} aria-label="no key" />}</td>
                 </tr>
               ))}
             </tbody>
@@ -100,11 +104,17 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
       {models.length === 0 && !modelsLoading ? (
         <div className="empty">No models found. Check provider API keys.</div>
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(248px, 1fr))", gap: 10 }}>
-          {models.map(m => (
-            <div key={`${m.provider}/${m.id}`} className="model-card">
-              <div className="id">{m.id}</div>
-              <div className="prov">{m.provider}{m.owned_by ? ` · ${m.owned_by}` : ""}</div>
+        <div className="stack" style={{ gap: 16 }}>
+          {grouped.map(([provider, rows]) => (
+            <div key={provider} className="model-group">
+              <div className="model-group-head">{provider}<span className="count">{rows.length}</span></div>
+              <div className="model-grid">
+                {rows.map(m => (
+                  <div key={`${m.provider}/${m.id}`} className="model-card">
+                    <div className="id">{m.id}</div>
+                  </div>
+                ))}
+              </div>
             </div>
           ))}
         </div>

@@ -4,7 +4,7 @@ Status: active
 
 Baseline date: 2026-07-21
 
-- OpenCodex: `main@f6acbcd`
+- OpenCodex: `main@26d4174`
 - codex-proxy: `main@9518cd1`
 
 ## Goal
@@ -42,8 +42,8 @@ gate before the next batch starts.
 | Effective upstream and fallback observability | Completed in `f5e40af` | Batch 3E |
 | Session workspace/dashboard controls | Completed in `f6acbcd` | Batch 3F |
 | Personal Codex account pool | Existing and broader in OpenCodex | Gap audit only; do not port wholesale |
-| First-output retry, stall timeout, cancellation | Existing but different implementation | Phase 4 parity audit, patch only proven gaps |
-| Usage/cache/tool accounting | Existing detailed usage and attempt records | Phase 4 parity audit, patch only proven gaps |
+| First-output retry, stall timeout, cancellation | Equivalent or stronger after Phase 4 audit | No migration patch required |
+| Usage/cache/tool accounting | Equivalent or stronger fields; bounded retention completed in `26d4174` | Completed |
 | Incident history and health classification | Partial through logs/debug/health | Phase 5 gap audit |
 | macOS deployment hardening | OpenCodex has its own service/update lifecycle | Audit native path; do not copy proxy scripts |
 | GLM Broker lifecycle and sandbox | Not needed in the target architecture | Intentionally excluded |
@@ -149,14 +149,19 @@ Status: completed in `f6acbcd`.
 
 ### Phase 4: Reliability and Accounting Parity
 
-Status: pending.
+Status: completed in `26d4174`.
 
-- Compare pre-first-output retry, stream commit, stall, cancellation, and shutdown
-  behavior against codex-proxy.
-- Compare reported/estimated/missing usage, cache tokens, tool calls, and retry
-  attempts.
-- Patch only reproducible gaps. Preserve OpenCodex's provider-generic architecture.
-- Add failure-path tests before changing retry or accounting semantics.
+- The reliability audit found OpenCodex equivalent or stronger for pre-first-output
+  retry, semantic stream commit, stall handling, cancellation, shutdown/drain, and
+  request cleanup. No reliability patch was justified.
+- Accounting already distinguishes reported, estimated, and missing usage; records
+  cache and reasoning tokens, request and attempt TTFT, physical attempts, recovery
+  kinds, and terminal close reasons.
+- Replace new writes to the unbounded `usage.jsonl` with local-date shards under
+  `usage/`, retaining 30 calendar days. Continue reading the legacy file without
+  rewriting it.
+- Pruning is best-effort, once per local day, and touches only strict valid shard
+  names. Unknown files, directories, and the cutoff-day shard are preserved.
 
 ### Phase 5: Diagnostics and Incident Parity
 

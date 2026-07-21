@@ -11,6 +11,7 @@ import {
   setSessionRoutePolicy,
 } from "../src/server/session-route-policy";
 import { beginRequestActivity, resetRequestActivityForTests } from "../src/server/request-activity";
+import type { RequestRouteObservation } from "../src/server/request-activity";
 import { addRequestLog, clearRequestLogsForTests } from "../src/server/request-log";
 import { handleManagementAPI } from "../src/server/management-api";
 import type { OcxConfig } from "../src/types";
@@ -474,6 +475,50 @@ describe("session route policy auth selection", () => {
     });
     expect(config.providers.openai?.codexAccountMode).toBe("direct");
     expect(config.activeCodexAccountId).toBeUndefined();
+  });
+
+  test("ordinary responses report the effective Direct fallback without account material", async () => {
+    const config = directAuthConfig([]);
+    delete config.activeCodexAccountId;
+    setSessionRoutePolicy("root-observed-fallback", "personal_first");
+    const originalFetch = globalThis.fetch;
+    let observed: RequestRouteObservation | undefined;
+    globalThis.fetch = async () => Response.json({
+      id: "response-test",
+      object: "response",
+      status: "completed",
+      model: "gpt-test",
+      output: [],
+      usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+    });
+
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: "Bearer caller-token",
+          "x-codex-session-id": "root-observed-fallback",
+        },
+        body: JSON.stringify({ model: "gpt-test", input: "hello", stream: false }),
+      }), config, { model: "", provider: "" }, {
+        onRequestRouteResolved: value => { observed = value; },
+      });
+
+      expect(response.status).toBe(200);
+      expect(observed).toEqual({
+        routePolicy: "personal_first",
+        requestedModel: "gpt-test",
+        effectiveProvider: "openai",
+        effectiveModel: "gpt-test",
+        effectiveUpstream: "codex_direct",
+        fallbackReason: "all_personal_accounts_unavailable",
+      });
+      expect(JSON.stringify(observed)).not.toContain("accountId");
+      expect(JSON.stringify(observed)).not.toContain("caller-token");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   test("personal_first cannot bypass Direct caller authentication", async () => {

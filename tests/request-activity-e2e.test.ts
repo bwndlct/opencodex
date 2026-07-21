@@ -38,7 +38,14 @@ function isActivitySession(value: unknown): value is RequestActivitySession {
     && typeof value.activeRequests === "number"
     && Array.isArray(value.executionSessionIds)
     && value.executionSessionIds.every(id => typeof id === "string")
-    && typeof value.oldestStartedAt === "number";
+    && typeof value.oldestStartedAt === "number"
+    && value.routePolicy === "inherit"
+    && value.requestedProvider === "local-activity"
+    && value.requestedModel === "local-activity/activity-model"
+    && value.effectiveProvider === "local-activity"
+    && value.effectiveModel === "activity-model"
+    && value.effectiveUpstream === "provider"
+    && value.fallbackReason === undefined;
 }
 
 function isActivitySnapshot(value: unknown): value is RequestActivitySnapshot {
@@ -219,11 +226,20 @@ describe("live root session activity (end-to-end)", () => {
     );
     expect(activeAtTwo.activeRequests).toBe(2);
     expect(activeAtTwo.unattributedActiveRequests).toBe(0);
-    expect(activitySession(activeAtTwo)?.executionSessionIds).toEqual(["child-session", "root-session"]);
+    expect(activitySession(activeAtTwo)).toMatchObject({
+      executionSessionIds: ["child-session", "root-session"],
+      routePolicy: "inherit",
+      requestedProvider: "local-activity",
+      requestedModel: "local-activity/activity-model",
+      effectiveProvider: "local-activity",
+      effectiveModel: "activity-model",
+      effectiveUpstream: "provider",
+    });
     const serialized = JSON.stringify(activeAtTwo);
     expect(serialized).not.toContain("private prompt text");
     expect(serialized).not.toContain("private child prompt text");
     expect(serialized).not.toContain("test-api-key");
+    expect(serialized).not.toContain("accountId");
 
     gates.get("root-session")?.release();
     await mainResponse.text();

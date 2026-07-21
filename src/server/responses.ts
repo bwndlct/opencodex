@@ -83,6 +83,7 @@ import {
 } from "./request-log";
 import type { AttemptRecoveryKind } from "../usage/log";
 import { requestIdentityFrom, type RequestIdentity } from "./request-identity";
+import type { RequestRouteObservation } from "./request-activity";
 import { getSessionRoutePolicy, type SessionRoutePolicy } from "./session-route-policy";
 import {
   consumeForInspection,
@@ -503,6 +504,7 @@ interface HandleResponsesOptions {
   forceEmptyResponseId?: boolean;
   abortSignal?: AbortSignal;
   onRequestIdentityResolved?: (identity: RequestIdentity) => void;
+  onRequestRouteResolved?: (observation: RequestRouteObservation) => void;
   /** Internal identity handoff for routed compact and combo recursion. */
   identityOverride?: RequestIdentity;
   /** One-shot TTFT callback: first non-empty model output observed (WP4). */
@@ -516,6 +518,11 @@ interface HandleResponsesOptions {
   comboAttempt?: boolean;
   /** 030-owned handoff when a child consumed the original failure under bounds. */
   onConsumedComboFailure?: (failure: ConsumedComboFailure) => void;
+}
+
+function explicitRequestedProvider(modelId: string): string | undefined {
+  const separator = modelId.indexOf("/");
+  return separator > 0 ? modelId.slice(0, separator) : undefined;
 }
 
 function clientCancelledResponse(): Response {
@@ -970,6 +977,8 @@ export async function handleResponses(
 
   let authCtx: CodexAuthContext = { kind: "main", accountId: null };
   let effectiveCodexAccountMode = route.codexAccountMode;
+  let routePolicy = getSessionRoutePolicy(identity.rootSessionId);
+  let usedConfiguredFallback = false;
   let selectedForwardHeaders: Headers;
   try {
     if (route.codexAccountMode) {
@@ -981,6 +990,8 @@ export async function handleResponses(
       );
       authCtx = selection.context;
       effectiveCodexAccountMode = selection.mode;
+      routePolicy = selection.routePolicy;
+      usedConfiguredFallback = selection.usedConfiguredFallback;
       options.onCodexAuthContextResolved?.(authCtx);
     } else {
       options.onCodexAuthContextResolved?.(undefined);
@@ -1014,6 +1025,20 @@ export async function handleResponses(
   }
   route.provider = applyCodexAuthContextToProvider(route.provider, authCtx, effectiveCodexAccountMode);
   logCtx.provider = formatCodexProviderForLog(route.providerName, codexLogAccountId(authCtx), config);
+  const requestedProvider = explicitRequestedProvider(originalRequestedModelId);
+  options.onRequestRouteResolved?.({
+    routePolicy,
+    ...(requestedProvider ? { requestedProvider } : {}),
+    requestedModel: originalRequestedModelId,
+    effectiveProvider: route.providerName,
+    effectiveModel: route.modelId,
+    effectiveUpstream: effectiveCodexAccountMode === "pool"
+      ? "codex_pool"
+      : effectiveCodexAccountMode === "direct"
+        ? "codex_direct"
+        : "provider",
+    ...(usedConfiguredFallback ? { fallbackReason: "all_personal_accounts_unavailable" } : {}),
+  });
 
   // OAuth providers: swap in a fresh access token (auto-refreshed) as the Bearer key, so the
   // existing openai-chat / anthropic adapters authenticate with no change.

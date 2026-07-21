@@ -38,8 +38,8 @@ gate before the next batch starts.
 | Request/session identity | Missing before Batch 3A | Completed in `5afd49a` |
 | Root Session active-request aggregation | Completed in `cedf128` | Batch 3B |
 | Main/child account affinity by root Session | Completed in `911f8d8` | Batch 3C |
-| Per-Session `inherit` / `personal_first` policy | Completed in the current batch | Batch 3D |
-| Effective upstream and fallback observability | Partial request-level logs only | Batch 3E |
+| Per-Session `inherit` / `personal_first` policy | Completed in `8349d72` | Batch 3D |
+| Effective upstream and fallback observability | Completed in the current batch | Batch 3E |
 | Session workspace/dashboard controls | Missing | Batch 3F, after backend contracts stabilize |
 | Personal Codex account pool | Existing and broader in OpenCodex | Gap audit only; do not port wholesale |
 | First-output retry, stall timeout, cancellation | Existing but different implementation | Phase 4 parity audit, patch only proven gaps |
@@ -120,7 +120,7 @@ Status: completed and pushed as `911f8d8`.
 
 ### Batch 3D: Per-Session Route Policy
 
-Status: completed in the current batch.
+Status: completed and pushed as `8349d72`.
 
 - Add `inherit | personal_first` as a persisted root-Session policy.
 - Use atomic, owner-only local persistence and corruption-safe startup behavior.
@@ -130,7 +130,7 @@ Status: completed in the current batch.
 
 ### Batch 3E: Session Routing Observability
 
-Status: next.
+Status: completed in the current batch.
 
 - Add effective upstream and stable fallback reason to the root-Session snapshot.
 - Keep requested provider/model separate from effective provider/model.

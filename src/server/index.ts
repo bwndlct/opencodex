@@ -120,7 +120,7 @@ import { buildDesktop3pRegistry } from "../claude/desktop-3p";
 import { handleImages } from "./images";
 import { handleSearch } from "./search";
 import { fetchAllModels, handleManagementAPI, VERSION } from "./management-api";
-import { beginRequestActivity, endRequestActivity } from "./request-activity";
+import { beginRequestActivity, endRequestActivity, updateRequestActivityRoute } from "./request-activity";
 
 const MAX_WS_FRAME_BYTES = 50 * 1024 * 1024;
 const WEBSOCKET_IDLE_TIMEOUT_SECONDS = 0;
@@ -418,6 +418,9 @@ export function startServer(port?: number) {
             onRequestIdentityResolved: identity => {
               beginRequestActivity(requestId, start, identity);
             },
+            onRequestRouteResolved: observation => {
+              updateRequestActivityRoute(requestId, observation);
+            },
             onFirstOutput: () => recordFirstOutput(logCtx, start),
             onNativePassthroughTerminal: status => {
               finalizeNativePassthroughLog(httpStatusForTerminalStatus(status), {
@@ -575,6 +578,9 @@ export function startServer(port?: number) {
               abortSignal: turnAbort.signal,
               onRequestIdentityResolved: identity => {
                 beginRequestActivity(requestId, start, identity);
+              },
+              onRequestRouteResolved: observation => {
+                updateRequestActivityRoute(requestId, observation);
               },
               onFirstOutput: () => recordFirstOutput(logCtx, start),
               onCodexAuthContextResolved: context => updateCodexWebSocketAuthContext(ws, context),

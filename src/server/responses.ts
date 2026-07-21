@@ -464,6 +464,8 @@ interface HandleResponsesOptions {
   forceEmptyResponseId?: boolean;
   abortSignal?: AbortSignal;
   onRequestIdentityResolved?: (identity: RequestIdentity) => void;
+  /** Internal identity handoff for routed compact and combo recursion. */
+  identityOverride?: RequestIdentity;
   /** One-shot TTFT callback: first non-empty model output observed (WP4). */
   onFirstOutput?: () => void;
   onCodexAuthContextResolved?: (context: CodexAuthContext | undefined) => void;
@@ -759,12 +761,15 @@ export async function handleResponses(
   } catch (err) {
     return decodeRequestErrorResponse(err, "responses");
   }
-  const identity = requestIdentityFrom(req.headers, body);
+  const identity = options.identityOverride ?? requestIdentityFrom(req.headers, body);
   Object.assign(logCtx, identity);
   options.onRequestIdentityResolved?.(identity);
   const comboId = !options.comboAttempt ? comboIdFromRawBody(body) : null;
   if (comboId && Object.hasOwn(config.combos ?? {}, comboId)) {
-    return handleComboResponses(req, body, comboId, config, logCtx, options);
+    return handleComboResponses(req, body, comboId, config, logCtx, {
+      ...options,
+      identityOverride: identity,
+    });
   }
   const originalBody = body;
   body = expandPreviousResponseInput(body);
@@ -929,7 +934,9 @@ export async function handleResponses(
   try {
     if (route.codexAccountMode === "direct") validateForwardAdmissionCredential(req.headers, config);
     if (route.codexAccountMode) {
-      authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode);
+      authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode, {
+        rootSessionId: identity.rootSessionId,
+      });
       options.onCodexAuthContextResolved?.(authCtx);
     } else {
       options.onCodexAuthContextResolved?.(undefined);
@@ -1676,6 +1683,8 @@ export async function handleResponsesCompact(
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     return formatErrorResponse(400, "invalid_request_error", "Invalid compaction request body");
   }
+  const identity = requestIdentityFrom(req.headers, body);
+  Object.assign(logCtx, identity);
   const raw = body as { model?: unknown; input?: unknown };
   if (typeof raw.model !== "string" || raw.model.length === 0) {
     return formatErrorResponse(400, "invalid_request_error", "compaction request requires a model");
@@ -1718,7 +1727,9 @@ export async function handleResponsesCompact(
     const headers = new Headers({ "content-type": "application/json" });
     try {
       if (route.codexAccountMode) {
-        const authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode);
+        const authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode, {
+          rootSessionId: identity.rootSessionId,
+        });
         const selected = headersForCodexAuthContext(req.headers, authCtx);
         compactProvider = applyCodexAuthContextToProvider(route.provider, authCtx, route.codexAccountMode);
         for (const name of FORWARD_HEADERS) {
@@ -1782,7 +1793,10 @@ export async function handleResponsesCompact(
     headers: internalHeaders,
     body: JSON.stringify(internalBody),
   });
-  const response = await handleResponses(internalReq, config, logCtx, { abortSignal: req.signal });
+  const response = await handleResponses(internalReq, config, logCtx, {
+    abortSignal: req.signal,
+    identityOverride: identity,
+  });
   if (!response.ok) return response;
   let json: { output?: unknown[] };
   try {

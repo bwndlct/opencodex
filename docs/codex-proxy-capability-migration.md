@@ -97,7 +97,7 @@ Status: completed and pushed as `5afd49a`.
 
 ### Batch 3B: Live Root Session Activity
 
-Status: next.
+Status: completed and pushed as `cedf128`.
 
 - Add an in-memory request-activity registry keyed by request ID and aggregated by
   root Session.
@@ -111,7 +111,7 @@ Status: next.
 
 ### Batch 3C: Root Session Account Affinity
 
-Status: pending.
+Status: completed in the current batch.
 
 - Reuse Batch 3A identity for Codex account selection.
 - Bind a main request and its children to the same root Session account.
@@ -120,7 +120,7 @@ Status: pending.
 
 ### Batch 3D: Per-Session Route Policy
 
-Status: pending.
+Status: next.
 
 - Add `inherit | personal_first` as a persisted root-Session policy.
 - Use atomic, owner-only local persistence and corruption-safe startup behavior.

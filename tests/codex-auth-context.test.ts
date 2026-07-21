@@ -29,6 +29,7 @@ import {
   clearThreadAccountMap,
   recordCodexUpstreamOutcome,
 } from "../src/codex/routing";
+import { handleResponsesCompact } from "../src/server/responses";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
 
 let testDir: string;
@@ -84,7 +85,12 @@ const forwardProvider: OcxProviderConfig = {
 describe("Codex auth context", () => {
   test("direct mode returns caller-owned main context without touching pool selection", async () => {
     const cfg = { ...config(), activeCodexAccountId: "missing-pool-account" };
-    await expect(resolveCodexAuthContext(new Headers({ authorization: "Bearer caller" }), cfg, "direct"))
+    await expect(resolveCodexAuthContext(
+      new Headers({ authorization: "Bearer caller", "x-codex-parent-thread-id": "legacy-thread" }),
+      cfg,
+      "direct",
+      { rootSessionId: "explicit-root" },
+    ))
       .resolves.toEqual({ kind: "main", accountId: null });
   });
   test("direct mode fails locally without a caller bearer", async () => {
@@ -110,6 +116,174 @@ describe("Codex auth context", () => {
       accessToken: "pool_token",
       chatgptAccountId: "pool_acc",
     });
+  });
+
+  test("explicit root identity wins over a conflicting legacy header and fallback stays legacy-compatible", async () => {
+    const cfg = {
+      ...config(),
+      activeCodexAccountId: "pool-a",
+      autoSwitchThreshold: 0,
+      codexAccounts: [
+        { id: "pool-a", email: "pool-a@example.test", isMain: false, chatgptAccountId: "pool_acc_a" },
+        { id: "pool-b", email: "pool-b@example.test", isMain: false, chatgptAccountId: "pool_acc_b" },
+      ],
+    };
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "pool_token_a",
+      refreshToken: "pool_refresh_a",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "pool_acc_a",
+    });
+    saveCodexAccountCredential("pool-b", {
+      accessToken: "pool_token_b",
+      refreshToken: "pool_refresh_b",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "pool_acc_b",
+    });
+
+    const main = await resolveCodexAuthContext(
+      new Headers({ "x-codex-session-id": "root-session" }),
+      cfg,
+      "pool",
+      { rootSessionId: "root-session" },
+    );
+    expect(main).toMatchObject({ accountId: "pool-a" });
+
+    cfg.activeCodexAccountId = "pool-b";
+    const legacy = await resolveCodexAuthContext(
+      new Headers({ "x-codex-parent-thread-id": "legacy-thread" }),
+      cfg,
+      "pool",
+    );
+    expect(legacy).toMatchObject({ accountId: "pool-b" });
+
+    const explicit = await resolveCodexAuthContext(
+      new Headers({
+        "x-codex-session-id": "child-session",
+        "x-codex-parent-thread-id": "legacy-thread",
+      }),
+      cfg,
+      "pool",
+      { rootSessionId: "root-session" },
+    );
+    expect(explicit).toMatchObject({ accountId: "pool-a" });
+
+    const fallback = await resolveCodexAuthContext(
+      new Headers({ "x-codex-parent-thread-id": "legacy-thread" }),
+      cfg,
+      "pool",
+    );
+    expect(fallback).toMatchObject({ accountId: "pool-b" });
+  });
+
+  test("main and child requests keep the root-bound account after active account changes", async () => {
+    const cfg = {
+      ...config(),
+      activeCodexAccountId: "pool-a",
+      autoSwitchThreshold: 0,
+      codexAccounts: [
+        { id: "pool-a", email: "pool-a@example.test", isMain: false, chatgptAccountId: "pool_acc_a" },
+        { id: "pool-b", email: "pool-b@example.test", isMain: false, chatgptAccountId: "pool_acc_b" },
+      ],
+    };
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "pool_token_a",
+      refreshToken: "pool_refresh_a",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "pool_acc_a",
+    });
+    saveCodexAccountCredential("pool-b", {
+      accessToken: "pool_token_b",
+      refreshToken: "pool_refresh_b",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "pool_acc_b",
+    });
+
+    const main = await resolveCodexAuthContext(
+      new Headers({ "x-codex-session-id": "root-session" }),
+      cfg,
+      "pool",
+      { rootSessionId: "root-session" },
+    );
+    cfg.activeCodexAccountId = "pool-b";
+    const child = await resolveCodexAuthContext(
+      new Headers({
+        "x-codex-session-id": "child-session",
+        "x-codex-parent-thread-id": "root-session",
+      }),
+      cfg,
+      "pool",
+      { rootSessionId: "root-session" },
+    );
+
+    expect(main).toMatchObject({ accountId: "pool-a" });
+    expect(child).toMatchObject({ accountId: "pool-a" });
+  });
+
+  test("native compact resolves pool auth from the explicit root identity", async () => {
+    const cfg: OcxConfig = {
+      ...config(),
+      defaultProvider: "openai",
+      activeCodexAccountId: "pool-a",
+      autoSwitchThreshold: 0,
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.test/backend-api/codex",
+          authMode: "forward",
+          codexAccountMode: "pool",
+        },
+      },
+      codexAccounts: [
+        { id: "pool-a", email: "pool-a@example.test", isMain: false, chatgptAccountId: "pool_acc_a" },
+        { id: "pool-b", email: "pool-b@example.test", isMain: false, chatgptAccountId: "pool_acc_b" },
+      ],
+    };
+    const credentials: Array<[string, string]> = [["pool-a", "pool_acc_a"], ["pool-b", "pool_acc_b"]];
+    for (const [accountId, chatgptAccountId] of credentials) {
+      saveCodexAccountCredential(accountId, {
+        accessToken: `pool_token_${accountId.slice(-1)}`,
+        refreshToken: `pool_refresh_${accountId.slice(-1)}`,
+        expiresAt: Date.now() + 5 * 60_000,
+        chatgptAccountId,
+      });
+    }
+
+    const root = "root-session";
+    await resolveCodexAuthContext(new Headers(), cfg, "pool", { rootSessionId: root });
+    cfg.activeCodexAccountId = "pool-b";
+
+    const originalFetch = globalThis.fetch;
+    let seen: { authorization: string | null; accountId: string | null } | undefined;
+    const mockFetch: typeof fetch = async (_input, init) => {
+      const headers = new Headers(init?.headers);
+      seen = {
+        authorization: headers.get("authorization"),
+        accountId: headers.get("chatgpt-account-id"),
+      };
+      return Response.json({ output: [] });
+    };
+    globalThis.fetch = mockFetch;
+
+    try {
+      const response = await handleResponsesCompact(
+        new Request("http://localhost/v1/responses/compact", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-codex-session-id": "child-session",
+          },
+          body: JSON.stringify({ model: "gpt-test", parent_thread_id: root, input: [] }),
+        }),
+        cfg,
+        { model: "", provider: "" },
+      );
+
+      expect(response.status).toBe(200);
+      expect(seen).toEqual({ authorization: "Bearer pool_token_a", accountId: "pool_acc_a" });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   test("selected pool headers replace inbound main auth", () => {

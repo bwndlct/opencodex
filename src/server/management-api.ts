@@ -49,6 +49,7 @@ import {
 import type { OcxClaudeCodeConfig, OcxConfig, OcxProviderConfig } from "../types";
 import { drainAndShutdown, snapshotDrainState } from "./lifecycle";
 import { IncidentHistory, DEFAULT_INCIDENT_LIMIT, MAX_INCIDENT_LIMIT } from "./incidents";
+import { buildHealthReport } from "./health";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "./request-log";
 import { sanitizeIdentityValue } from "./request-identity";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../usage/cost";
@@ -81,6 +82,7 @@ export interface ManagementApiDeps {
   clearProviderQuotaCache?: () => void;
   primeCodexPoolQuotas?: (config: OcxConfig, reason: string) => Promise<void> | void;
   readUsageEntries?: () => ReturnType<typeof readUsageEntries>;
+  healthNow?: () => number;
 }
 
 /** Narrow an unknown JSON value to a plain (non-array) object for strict request-body validation. */
@@ -478,6 +480,13 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     } catch {
       return jsonResponse({ error: "incident_history_unavailable" }, 500, req, config);
     }
+  }
+
+  if (url.pathname === "/api/health" && req.method === "GET") {
+    return jsonResponse(buildHealthReport(config, {
+      readEntries: deps.readUsageEntries ?? readUsageEntries,
+      now: deps.healthNow?.(),
+    }), 200, req, config);
   }
 
   const sessionRoutePolicyPath = matchSessionRoutePolicyPath(url.pathname);

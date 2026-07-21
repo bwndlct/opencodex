@@ -48,7 +48,9 @@ import {
 } from "../lib/debug-settings";
 import type { OcxClaudeCodeConfig, OcxConfig, OcxProviderConfig } from "../types";
 import { drainAndShutdown } from "./lifecycle";
+import { IncidentHistory, DEFAULT_INCIDENT_LIMIT, MAX_INCIDENT_LIMIT } from "./incidents";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "./request-log";
+import { sanitizeIdentityValue } from "./request-identity";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../usage/cost";
 import type { PersistedUsageAttempt } from "../usage/log";
 import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "./auth-cors";
@@ -78,6 +80,7 @@ export interface ManagementApiDeps {
   clearThreadAccountMap?: () => void;
   clearProviderQuotaCache?: () => void;
   primeCodexPoolQuotas?: (config: OcxConfig, reason: string) => Promise<void> | void;
+  readUsageEntries?: () => ReturnType<typeof readUsageEntries>;
 }
 
 /** Narrow an unknown JSON value to a plain (non-array) object for strict request-body validation. */
@@ -92,6 +95,28 @@ function parseDebugLogQuery(url: URL): { after: number; limit: number } {
     after: Number.isFinite(after) && after > 0 ? after : 0,
     limit: Number.isFinite(limit) && limit > 0 ? Math.min(limit, 2000) : 500,
   };
+}
+
+type IncidentQuery = { limit: number; rootSessionId?: string };
+type IncidentQueryResult =
+  | { ok: true; query: IncidentQuery }
+  | { ok: false; error: "invalid_limit" | "invalid_root_session_id" };
+
+function parseIncidentQuery(url: URL): IncidentQueryResult {
+  const rawLimit = url.searchParams.get("limit");
+  let limit = DEFAULT_INCIDENT_LIMIT;
+  if (rawLimit !== null) {
+    if (!/^\d+$/.test(rawLimit)) return { ok: false, error: "invalid_limit" };
+    const parsed = Number(rawLimit);
+    if (!Number.isSafeInteger(parsed)) return { ok: false, error: "invalid_limit" };
+    limit = Math.min(MAX_INCIDENT_LIMIT, Math.max(1, parsed));
+  }
+
+  const rawRootSessionId = url.searchParams.get("rootSessionId");
+  if (rawRootSessionId === null) return { ok: true, query: { limit } };
+  const rootSessionId = sanitizeIdentityValue(rawRootSessionId);
+  if (!rootSessionId) return { ok: false, error: "invalid_root_session_id" };
+  return { ok: true, query: { limit, rootSessionId } };
 }
 
 const SESSION_ROUTE_POLICY_PREFIX = "/api/sessions/";
@@ -443,6 +468,16 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
   if (url.pathname === "/api/logs" && req.method === "GET") {
     const logs = filterRequestLogs(getRequestLogEntries(), url.searchParams);
     return jsonResponse(logs.map(requestLogDto));
+  }
+
+  if (url.pathname === "/api/incidents" && req.method === "GET") {
+    const parsedQuery = parseIncidentQuery(url);
+    if (!parsedQuery.ok) return jsonResponse({ error: parsedQuery.error }, 400, req, config);
+    try {
+      return jsonResponse(new IncidentHistory(deps.readUsageEntries).list(parsedQuery.query), 200, req, config);
+    } catch {
+      return jsonResponse({ error: "incident_history_unavailable" }, 500, req, config);
+    }
   }
 
   const sessionRoutePolicyPath = matchSessionRoutePolicyPath(url.pathname);

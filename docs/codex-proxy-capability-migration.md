@@ -36,9 +36,9 @@ gate before the next batch starts.
 | Z.AI through Anthropic protocol | Existing provider support; isolated canary passed | Configure and validate, no duplicate adapter |
 | GLM model metadata | Static catalog supported | Completed as isolated metadata configuration |
 | Request/session identity | Missing before Batch 3A | Completed in `5afd49a` |
-| Root Session active-request aggregation | Missing | Batch 3B |
-| Main/child account affinity by root Session | Partial; current pool reads one parent header | Batch 3C |
-| Per-Session `inherit` / `personal_first` policy | Missing | Batch 3D |
+| Root Session active-request aggregation | Completed in `cedf128` | Batch 3B |
+| Main/child account affinity by root Session | Completed in `911f8d8` | Batch 3C |
+| Per-Session `inherit` / `personal_first` policy | Completed in the current batch | Batch 3D |
 | Effective upstream and fallback observability | Partial request-level logs only | Batch 3E |
 | Session workspace/dashboard controls | Missing | Batch 3F, after backend contracts stabilize |
 | Personal Codex account pool | Existing and broader in OpenCodex | Gap audit only; do not port wholesale |
@@ -111,7 +111,7 @@ Status: completed and pushed as `cedf128`.
 
 ### Batch 3C: Root Session Account Affinity
 
-Status: completed in the current batch.
+Status: completed and pushed as `911f8d8`.
 
 - Reuse Batch 3A identity for Codex account selection.
 - Bind a main request and its children to the same root Session account.
@@ -120,7 +120,7 @@ Status: completed in the current batch.
 
 ### Batch 3D: Per-Session Route Policy
 
-Status: next.
+Status: completed in the current batch.
 
 - Add `inherit | personal_first` as a persisted root-Session policy.
 - Use atomic, owner-only local persistence and corruption-safe startup behavior.
@@ -130,7 +130,7 @@ Status: next.
 
 ### Batch 3E: Session Routing Observability
 
-Status: pending.
+Status: next.
 
 - Add effective upstream and stable fallback reason to the root-Session snapshot.
 - Keep requested provider/model separate from effective provider/model.

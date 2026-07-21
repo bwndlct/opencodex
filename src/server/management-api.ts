@@ -54,6 +54,13 @@ import type { PersistedUsageAttempt } from "../usage/log";
 import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "./auth-cors";
 import { applySystemEnvToggle } from "./system-env";
 import { snapshotRequestActivity } from "./request-activity";
+import {
+  getSessionRoutePolicy,
+  hasSessionRoutePolicy,
+  isSessionRoutePolicy,
+  normalizeRootSessionId,
+  setSessionRoutePolicy,
+} from "./session-route-policy";
 
 // Single source of truth = package.json (../ from src/), so /healthz + the GUI badge match the
 // installed npm version instead of a stale hardcode.
@@ -85,6 +92,34 @@ function parseDebugLogQuery(url: URL): { after: number; limit: number } {
     after: Number.isFinite(after) && after > 0 ? after : 0,
     limit: Number.isFinite(limit) && limit > 0 ? Math.min(limit, 2000) : 500,
   };
+}
+
+const SESSION_ROUTE_POLICY_PREFIX = "/api/sessions/";
+const SESSION_ROUTE_POLICY_SUFFIX = "/route-policy";
+
+type SessionRoutePolicyPathMatch =
+  | { matched: false }
+  | { matched: true; rootSessionId?: string };
+
+function matchSessionRoutePolicyPath(pathname: string): SessionRoutePolicyPathMatch {
+  if (!pathname.startsWith(SESSION_ROUTE_POLICY_PREFIX) || !pathname.endsWith(SESSION_ROUTE_POLICY_SUFFIX)) {
+    return { matched: false };
+  }
+  const encoded = pathname.slice(SESSION_ROUTE_POLICY_PREFIX.length, -SESSION_ROUTE_POLICY_SUFFIX.length);
+  if (!encoded) return { matched: true };
+  try {
+    const decoded = decodeURIComponent(encoded);
+    const rootSessionId = normalizeRootSessionId(decoded);
+    return rootSessionId ? { matched: true, rootSessionId } : { matched: true };
+  } catch {
+    return { matched: true };
+  }
+}
+
+function isObservedRootSession(rootSessionId: string): boolean {
+  if (hasSessionRoutePolicy(rootSessionId)) return true;
+  if (snapshotRequestActivity().sessions.some(session => session.rootSessionId === rootSessionId)) return true;
+  return getRequestLogEntries().some(entry => entry.rootSessionId === rootSessionId);
 }
 
 // ---- /api/logs display metrics (devlog/_plan/260720_toks_speed_price_columns/020) ----
@@ -408,6 +443,45 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
   if (url.pathname === "/api/logs" && req.method === "GET") {
     const logs = filterRequestLogs(getRequestLogEntries(), url.searchParams);
     return jsonResponse(logs.map(requestLogDto));
+  }
+
+  const sessionRoutePolicyPath = matchSessionRoutePolicyPath(url.pathname);
+  if (sessionRoutePolicyPath.matched) {
+    const rootSessionId = sessionRoutePolicyPath.rootSessionId;
+    if (!rootSessionId) return jsonResponse({ error: "invalid_session_id" }, 400);
+    if (req.method === "GET") {
+      return jsonResponse({
+        ok: true,
+        rootSessionId,
+        routePolicy: getSessionRoutePolicy(rootSessionId),
+        appliesTo: "future_requests",
+      });
+    }
+    if (req.method === "PUT") {
+      let body: unknown;
+      try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+      if (!isPlainRecord(body) || Object.keys(body).length !== 1 || !Object.hasOwn(body, "routePolicy")) {
+        return jsonResponse({ error: "routePolicy is required" }, 400);
+      }
+      if (!isSessionRoutePolicy(body.routePolicy)) {
+        return jsonResponse({ error: "routePolicy must be inherit or personal_first" }, 400);
+      }
+      if (!isObservedRootSession(rootSessionId)) {
+        return jsonResponse({ error: "session_not_found" }, 404);
+      }
+      try {
+        const result = setSessionRoutePolicy(rootSessionId, body.routePolicy);
+        return jsonResponse({
+          ok: true,
+          rootSessionId,
+          routePolicy: result.record.routePolicy,
+          appliesTo: "future_requests",
+        });
+      } catch {
+        return jsonResponse({ error: "persist_failed" }, 500);
+      }
+    }
+    return jsonResponse({ error: "method not allowed" }, 405);
   }
 
   if (url.pathname === "/api/sessions/active" && req.method === "GET") {

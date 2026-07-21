@@ -26,7 +26,7 @@ import {
 import { isInjectionDebugEnabled } from "../lib/debug-settings";
 import { injectionDebugLog } from "../lib/injection-debug-log";
 import { modelInList, namespacedToolName } from "../types";
-import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig, OcxUsage } from "../types";
+import type { AdapterEvent, CodexAccountMode, OcxConfig, OcxParsedRequest, OcxProviderConfig, OcxUsage } from "../types";
 import {
   forceRefreshOAuthAccessSnapshot,
   getOAuthCredentialApiBaseUrl,
@@ -83,6 +83,7 @@ import {
 } from "./request-log";
 import type { AttemptRecoveryKind } from "../usage/log";
 import { requestIdentityFrom, type RequestIdentity } from "./request-identity";
+import { getSessionRoutePolicy, type SessionRoutePolicy } from "./session-route-policy";
 import {
   consumeForInspection,
   consumeForResponseLogMetadata,
@@ -405,6 +406,44 @@ export function sidecarOutcomeRecorder(config: OcxConfig, authCtx: CodexAuthCont
 /** Account id to attribute log labels / upstream outcomes to (pool + rotation-injected main). */
 export function codexLogAccountId(authCtx: CodexAuthContext): string | null {
   return authCtx.kind === "pool" || authCtx.kind === "main-pool" ? authCtx.accountId : null;
+}
+
+export interface RequestCodexAuthSelection {
+  context: CodexAuthContext;
+  mode: CodexAccountMode;
+  routePolicy: SessionRoutePolicy;
+  usedConfiguredFallback: boolean;
+}
+
+function allowsPersonalFirstAuthFallback(error: unknown): boolean {
+  return error instanceof CodexPoolAuthenticationError
+    || error instanceof CodexAuthContextError
+    || error instanceof CodexAccountCooldownError;
+}
+
+export async function resolveRequestCodexAuth(
+  headers: Headers,
+  config: OcxConfig,
+  configuredMode: CodexAccountMode,
+  rootSessionId?: string,
+): Promise<RequestCodexAuthSelection> {
+  const routePolicy = getSessionRoutePolicy(rootSessionId);
+  const personalFirstOverride = routePolicy === "personal_first" && configuredMode === "direct";
+  const initialMode: CodexAccountMode = personalFirstOverride ? "pool" : configuredMode;
+  if (initialMode === "direct") validateForwardAdmissionCredential(headers, config);
+
+  try {
+    const context = await resolveCodexAuthContext(headers, config, initialMode, { rootSessionId });
+    if (isCodexAuthContextUsable(context, config) || !personalFirstOverride) {
+      return { context, mode: initialMode, routePolicy, usedConfiguredFallback: false };
+    }
+  } catch (error) {
+    if (!personalFirstOverride || !allowsPersonalFirstAuthFallback(error)) throw error;
+  }
+
+  validateForwardAdmissionCredential(headers, config);
+  const context = await resolveCodexAuthContext(headers, config, configuredMode, { rootSessionId });
+  return { context, mode: configuredMode, routePolicy, usedConfiguredFallback: true };
 }
 
 export function usesCodexForwardPoolAuth(
@@ -930,13 +969,18 @@ export async function handleResponses(
   );
 
   let authCtx: CodexAuthContext = { kind: "main", accountId: null };
+  let effectiveCodexAccountMode = route.codexAccountMode;
   let selectedForwardHeaders: Headers;
   try {
-    if (route.codexAccountMode === "direct") validateForwardAdmissionCredential(req.headers, config);
     if (route.codexAccountMode) {
-      authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode, {
-        rootSessionId: identity.rootSessionId,
-      });
+      const selection = await resolveRequestCodexAuth(
+        req.headers,
+        config,
+        route.codexAccountMode,
+        identity.rootSessionId,
+      );
+      authCtx = selection.context;
+      effectiveCodexAccountMode = selection.mode;
       options.onCodexAuthContextResolved?.(authCtx);
     } else {
       options.onCodexAuthContextResolved?.(undefined);
@@ -968,7 +1012,7 @@ export async function handleResponses(
   if (!isCodexAuthContextUsable(authCtx, config)) {
     return formatErrorResponse(401, "authentication_error", "Selected Codex account needs reauthentication");
   }
-  route.provider = applyCodexAuthContextToProvider(route.provider, authCtx, route.codexAccountMode);
+  route.provider = applyCodexAuthContextToProvider(route.provider, authCtx, effectiveCodexAccountMode);
   logCtx.provider = formatCodexProviderForLog(route.providerName, codexLogAccountId(authCtx), config);
 
   // OAuth providers: swap in a fresh access token (auto-refreshed) as the Bearer key, so the
@@ -1710,14 +1754,6 @@ export async function handleResponsesCompact(
     logCtx.resolvedModel = route.modelId;
   }
 
-  if (route.codexAccountMode === "direct") {
-    try { validateForwardAdmissionCredential(req.headers, config); }
-    catch (err) {
-      if (err instanceof ForwardAdmissionCredentialError) return formatErrorResponse(401, "authentication_error", err.message);
-      throw err;
-    }
-  }
-
   if (route.provider.adapter === "openai-responses") {
     // Native ChatGPT/OpenAI model: forward the compact request verbatim to the real backend.
     // Resolve the SAME pool/thread auth context as /v1/responses — forwarding the caller's raw
@@ -1727,11 +1763,15 @@ export async function handleResponsesCompact(
     const headers = new Headers({ "content-type": "application/json" });
     try {
       if (route.codexAccountMode) {
-        const authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode, {
-          rootSessionId: identity.rootSessionId,
-        });
+        const selection = await resolveRequestCodexAuth(
+          req.headers,
+          config,
+          route.codexAccountMode,
+          identity.rootSessionId,
+        );
+        const authCtx = selection.context;
         const selected = headersForCodexAuthContext(req.headers, authCtx);
-        compactProvider = applyCodexAuthContextToProvider(route.provider, authCtx, route.codexAccountMode);
+        compactProvider = applyCodexAuthContextToProvider(route.provider, authCtx, selection.mode);
         for (const name of FORWARD_HEADERS) {
           const value = selected.get(name);
           if (value) headers.set(name, value);

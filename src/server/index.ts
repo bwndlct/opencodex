@@ -120,6 +120,7 @@ import { buildDesktop3pRegistry } from "../claude/desktop-3p";
 import { handleImages } from "./images";
 import { handleSearch } from "./search";
 import { fetchAllModels, handleManagementAPI, VERSION } from "./management-api";
+import { beginRequestActivity, endRequestActivity } from "./request-activity";
 
 const MAX_WS_FRAME_BYTES = 50 * 1024 * 1024;
 const WEBSOCKET_IDLE_TIMEOUT_SECONDS = 0;
@@ -396,7 +397,11 @@ export function startServer(port?: number) {
         }
         const start = Date.now();
         const requestId = nextRequestLogId(start);
-        const logCtx = { model: "unknown", provider: "unknown" };
+        const logCtx: RequestLogContext = {
+          model: "unknown",
+          provider: "unknown",
+          activityRequestId: requestId,
+        };
         let logged = false;
         const finalizeNativePassthroughLog = (
           status: number,
@@ -406,19 +411,28 @@ export function startServer(port?: number) {
           logged = true;
           addFinalRequestLog(requestId, start, logCtx, status, meta);
         };
-        const response = await handleResponses(req, config, logCtx, {
-          abortSignal: req.signal,
-          onFirstOutput: () => recordFirstOutput(logCtx, start),
-          onNativePassthroughTerminal: status => {
-            finalizeNativePassthroughLog(httpStatusForTerminalStatus(status), {
-              terminalStatus: status,
-              closeReason: "terminal",
-            });
-          },
-          onNativePassthroughCancel: () => {
-            finalizeNativePassthroughLog(499, { closeReason: "client_cancel" });
-          },
-        });
+        let response: Response;
+        try {
+          response = await handleResponses(req, config, logCtx, {
+            abortSignal: req.signal,
+            onRequestIdentityResolved: identity => {
+              beginRequestActivity(requestId, start, identity);
+            },
+            onFirstOutput: () => recordFirstOutput(logCtx, start),
+            onNativePassthroughTerminal: status => {
+              finalizeNativePassthroughLog(httpStatusForTerminalStatus(status), {
+                terminalStatus: status,
+                closeReason: "terminal",
+              });
+            },
+            onNativePassthroughCancel: () => {
+              finalizeNativePassthroughLog(499, { closeReason: "client_cancel" });
+            },
+          });
+        } catch (error) {
+          endRequestActivity(requestId);
+          throw error;
+        }
         return withCors(responseWithDeferredRequestLog(response, requestId, start, logCtx), req, config);
       }
 
@@ -532,7 +546,11 @@ export function startServer(port?: number) {
         void (async () => {
           const start = Date.now();
           const requestId = nextRequestLogId(start);
-          const logCtx = { model: "unknown", provider: "unknown" };
+          const logCtx: RequestLogContext = {
+            model: "unknown",
+            provider: "unknown",
+            activityRequestId: requestId,
+          };
           let logged = false;
           const finalizeLog = (
             status: number,
@@ -555,6 +573,9 @@ export function startServer(port?: number) {
             const response = await handleResponses(req, config, logCtx, {
               forceEmptyResponseId: true,
               abortSignal: turnAbort.signal,
+              onRequestIdentityResolved: identity => {
+                beginRequestActivity(requestId, start, identity);
+              },
               onFirstOutput: () => recordFirstOutput(logCtx, start),
               onCodexAuthContextResolved: context => updateCodexWebSocketAuthContext(ws, context),
               recordTerminalOutcomes: false,
@@ -593,6 +614,7 @@ export function startServer(port?: number) {
               /* socket already gone or send dropped */
             }
           } finally {
+            endRequestActivity(requestId);
             unregisterTurn(turnAbort);
             if (!logged && turnAbort.signal.aborted) finalizeLog(499);
             if (ws.data.cancel === cancelTurn) ws.data.cancel = undefined;

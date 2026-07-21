@@ -53,6 +53,7 @@ import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerS
 import type { PersistedUsageAttempt } from "../usage/log";
 import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "./auth-cors";
 import { applySystemEnvToggle } from "./system-env";
+import { snapshotRequestActivity } from "./request-activity";
 
 // Single source of truth = package.json (../ from src/), so /healthz + the GUI badge match the
 // installed npm version instead of a stale hardcode.
@@ -407,6 +408,10 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
   if (url.pathname === "/api/logs" && req.method === "GET") {
     const logs = filterRequestLogs(getRequestLogEntries(), url.searchParams);
     return jsonResponse(logs.map(requestLogDto));
+  }
+
+  if (url.pathname === "/api/sessions/active" && req.method === "GET") {
+    return jsonResponse(snapshotRequestActivity());
   }
 
   if (url.pathname === "/api/debug" && req.method === "GET") {

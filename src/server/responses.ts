@@ -82,7 +82,7 @@ import {
   type RequestLogContext,
 } from "./request-log";
 import type { AttemptRecoveryKind } from "../usage/log";
-import { requestIdentityFrom } from "./request-identity";
+import { requestIdentityFrom, type RequestIdentity } from "./request-identity";
 import {
   consumeForInspection,
   consumeForResponseLogMetadata,
@@ -463,6 +463,7 @@ interface ConsumedComboFailure {
 interface HandleResponsesOptions {
   forceEmptyResponseId?: boolean;
   abortSignal?: AbortSignal;
+  onRequestIdentityResolved?: (identity: RequestIdentity) => void;
   /** One-shot TTFT callback: first non-empty model output observed (WP4). */
   onFirstOutput?: () => void;
   onCodexAuthContextResolved?: (context: CodexAuthContext | undefined) => void;
@@ -758,7 +759,9 @@ export async function handleResponses(
   } catch (err) {
     return decodeRequestErrorResponse(err, "responses");
   }
-  Object.assign(logCtx, requestIdentityFrom(req.headers, body));
+  const identity = requestIdentityFrom(req.headers, body);
+  Object.assign(logCtx, identity);
+  options.onRequestIdentityResolved?.(identity);
   const comboId = !options.comboAttempt ? comboIdFromRawBody(body) : null;
   if (comboId && Object.hasOwn(config.combos ?? {}, comboId)) {
     return handleComboResponses(req, body, comboId, config, logCtx, options);

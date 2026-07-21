@@ -25,10 +25,13 @@ import {
   USAGE_DEBUG_BODY_SAMPLE_BYTES,
   type UsageDebugBodyKind,
 } from "../usage/debug";
+import { endRequestActivity } from "./request-activity";
 
 export interface RequestLogContext {
   model: string;
   provider: string;
+  /** Internal activity registry key; never projected into RequestLogEntry or usage JSONL. */
+  activityRequestId?: string;
   /** TTFT: ms from request start to the first non-empty model output delta (WP4, devlog 040). */
   firstOutputMs?: number;
   surface?: "claude";
@@ -448,6 +451,7 @@ export function addFinalRequestLog(
   meta?: Pick<RequestLogEntry, "terminalStatus" | "closeReason">,
   addLog: (entry: RequestLogEntry) => void = addRequestLog,
 ): void {
+  endRequestActivity(logCtx.activityRequestId ?? "");
   // Mid-stream web-search aborts used to emit response.failed and land as 502/upstream_server_error.
   // Prefer the client-close classification whenever the captured reason says so.
   const effectiveStatus = status >= 500 && logCtx.upstreamError && isClientClosedMessage(logCtx.upstreamError)

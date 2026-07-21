@@ -4,7 +4,7 @@ Status: active
 
 Baseline date: 2026-07-21
 
-- OpenCodex: `main@5afd49a`
+- OpenCodex: `main@f6acbcd`
 - codex-proxy: `main@9518cd1`
 
 ## Goal
@@ -39,8 +39,8 @@ gate before the next batch starts.
 | Root Session active-request aggregation | Completed in `cedf128` | Batch 3B |
 | Main/child account affinity by root Session | Completed in `911f8d8` | Batch 3C |
 | Per-Session `inherit` / `personal_first` policy | Completed in `8349d72` | Batch 3D |
-| Effective upstream and fallback observability | Completed in the current batch | Batch 3E |
-| Session workspace/dashboard controls | Missing | Batch 3F, after backend contracts stabilize |
+| Effective upstream and fallback observability | Completed in `f5e40af` | Batch 3E |
+| Session workspace/dashboard controls | Completed in `f6acbcd` | Batch 3F |
 | Personal Codex account pool | Existing and broader in OpenCodex | Gap audit only; do not port wholesale |
 | First-output retry, stall timeout, cancellation | Existing but different implementation | Phase 4 parity audit, patch only proven gaps |
 | Usage/cache/tool accounting | Existing detailed usage and attempt records | Phase 4 parity audit, patch only proven gaps |
@@ -130,7 +130,7 @@ Status: completed and pushed as `8349d72`.
 
 ### Batch 3E: Session Routing Observability
 
-Status: completed in the current batch.
+Status: completed and pushed as `f5e40af`.
 
 - Add effective upstream and stable fallback reason to the root-Session snapshot.
 - Keep requested provider/model separate from effective provider/model.
@@ -139,7 +139,7 @@ Status: completed in the current batch.
 
 ### Batch 3F: Session Workspace UI
 
-Status: pending.
+Status: completed in `f6acbcd`.
 
 - Add a work-focused Session view backed by the stable 3B-3E APIs.
 - Show main/child activity, effective upstream, fallback state, and route policy.

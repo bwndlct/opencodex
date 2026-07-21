@@ -15,6 +15,24 @@ export function unregisterTurn(ac: AbortController): void { activeTurns.delete(a
 export function isDraining(): boolean { return draining; }
 export function getActiveTurnCount(): number { return activeTurns.size; }
 
+export type DrainSnapshot = {
+  activeRequests: number;
+  acceptingRequests: boolean;
+  ready: boolean;
+  mode: "graceful";
+};
+
+export function snapshotDrainState(): DrainSnapshot {
+  const activeRequests = getActiveTurnCount();
+  const currentlyDraining = isDraining();
+  return {
+    activeRequests,
+    acceptingRequests: !currentlyDraining,
+    ready: currentlyDraining && activeRequests === 0,
+    mode: "graceful",
+  };
+}
+
 export function trackStreamLifetime(
   body: ReadableStream<Uint8Array>,
   ac: AbortController,

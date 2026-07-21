@@ -47,7 +47,7 @@ import {
   type DebugFlag,
 } from "../lib/debug-settings";
 import type { OcxClaudeCodeConfig, OcxConfig, OcxProviderConfig } from "../types";
-import { drainAndShutdown } from "./lifecycle";
+import { drainAndShutdown, snapshotDrainState } from "./lifecycle";
 import { IncidentHistory, DEFAULT_INCIDENT_LIMIT, MAX_INCIDENT_LIMIT } from "./incidents";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "./request-log";
 import { sanitizeIdentityValue } from "./request-identity";
@@ -1716,6 +1716,11 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     clearComboTargetCooldowns(id);
     await refreshCodexCatalogBestEffort();
     return jsonResponse({ success: true, id });
+  }
+
+  if (url.pathname === "/api/drain" && req.method === "GET") {
+    const snapshot = snapshotDrainState();
+    return jsonResponse(snapshot, snapshot.ready ? 200 : 409);
   }
 
   if (url.pathname === "/api/stop" && req.method === "POST") {

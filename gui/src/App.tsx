@@ -4,6 +4,7 @@ import Providers from "./pages/Providers";
 import Models from "./pages/Models";
 import Combos from "./pages/Combos";
 import Subagents from "./pages/Subagents";
+import Sessions from "./pages/Sessions";
 import Logs from "./pages/Logs";
 import Debug from "./pages/Debug";
 import Usage from "./pages/Usage";
@@ -11,17 +12,17 @@ import Storage from "./pages/Storage";
 import CodexAuth from "./pages/CodexAuth";
 import ApiKeys from "./pages/ApiKeys";
 import ClaudeCode from "./pages/ClaudeCode";
-import { IconGrid, IconServer, IconBoxes, IconShuffle, IconBot, IconList, IconTerminal, IconActivity, IconHardDrive, IconKey, IconGithub, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconSparkle, IconX } from "./icons";
+import { IconGrid, IconServer, IconBoxes, IconShuffle, IconBot, IconList, IconTerminal, IconActivity, IconHardDrive, IconKey, IconGithub, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconSparkle, IconX, IconLink } from "./icons";
 import { useI18n, useT, LOCALES, type Locale, type TKey } from "./i18n";
 import { Select } from "./ui";
 import { installApiAuthFetch } from "./api";
 
 installApiAuthFetch();
 
-type Page = "dashboard" | "providers" | "models" | "combos" | "subagents" | "logs" | "debug" | "usage" | "storage" | "codex-auth" | "api" | "claude";
+type Page = "dashboard" | "sessions" | "providers" | "models" | "combos" | "subagents" | "logs" | "debug" | "usage" | "storage" | "codex-auth" | "api" | "claude";
 type Theme = "light" | "dark" | "system";
 
-const VALID_PAGES = new Set<Page>(["dashboard", "providers", "models", "combos", "subagents", "logs", "debug", "usage", "storage", "codex-auth", "api", "claude"]);
+const VALID_PAGES = new Set<Page>(["dashboard", "sessions", "providers", "models", "combos", "subagents", "logs", "debug", "usage", "storage", "codex-auth", "api", "claude"]);
 
 function readPageFromHash(): Page {
   const raw = location.hash.replace(/^#\/?/, "");
@@ -39,6 +40,7 @@ const THEME_KEY = "ocx-theme";
 
 const NAV: { id: Page; tkey: TKey; Icon: typeof IconGrid }[] = [
   { id: "dashboard", tkey: "nav.dashboard", Icon: IconGrid },
+  { id: "sessions", tkey: "nav.sessions", Icon: IconLink },
   { id: "providers", tkey: "nav.providers", Icon: IconServer },
   { id: "models", tkey: "nav.models", Icon: IconBoxes },
   { id: "combos", tkey: "nav.combos", Icon: IconShuffle },
@@ -268,6 +270,7 @@ export default function App() {
       <main className="main" inert={navOpen}>
         <div className={`main-inner${page === "combos" ? " main-inner--combos" : ""}`}>
           {page === "dashboard" && <Dashboard apiBase={API_BASE} />}
+          {page === "sessions" && <Sessions apiBase={API_BASE} />}
           {page === "providers" && <Providers apiBase={API_BASE} />}
           {page === "models" && <Models apiBase={API_BASE} />}
           {page === "combos" && <Combos apiBase={API_BASE} />}

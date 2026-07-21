@@ -51,6 +51,16 @@ const MAIN_HEADERS = new Headers({
   "x-codex-turn-metadata": JSON.stringify({ turn_id: "t1" }),
 });
 
+class RawHeaderValues extends Headers {
+  constructor(private readonly rawValues: Record<string, string>) {
+    super();
+  }
+
+  override get(name: string): string | null {
+    return this.rawValues[name.toLowerCase()] ?? super.get(name);
+  }
+}
+
 describe("isThreadSpawnRequest", () => {
   test("x-openai-subagent: collab_spawn classifies as spawned child", () => {
     expect(isThreadSpawnRequest(SUBAGENT_HEADERS)).toBe(true);
@@ -78,6 +88,17 @@ describe("isThreadSpawnRequest", () => {
   test("malformed turn metadata never classifies as spawned child", () => {
     expect(isThreadSpawnRequest(new Headers({ "x-codex-turn-metadata": "{not json" }))).toBe(false);
     expect(isThreadSpawnRequest(new Headers({ "x-codex-turn-metadata": JSON.stringify({ subagent_kind: 42 }) }))).toBe(false);
+    expect(isThreadSpawnRequest(new Headers({
+      "x-codex-turn-metadata": JSON.stringify({ subagent_kind: "x".repeat(257) }),
+    }))).toBe(false);
+  });
+
+  test("padded child markers do not enable the subagent effort cap", () => {
+    const config = makeConfig({ subagentEffortCap: "low" });
+    expect(effortCapAppliesTo(null, new RawHeaderValues({ "x-openai-subagent": " collab_spawn " }), config)).toBe(false);
+    expect(effortCapAppliesTo(null, new Headers({
+      "x-codex-turn-metadata": JSON.stringify({ subagent_kind: " thread_spawn " }),
+    }), config)).toBe(false);
   });
 });
 

@@ -1,3 +1,7 @@
+/**
+ * Test goal: exercise responses.ts combo failover with fake local upstreams and verify
+ * completed parent request logs retain request identity and physical target attempts.
+ */
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -374,6 +378,48 @@ describe("server combo failover 030 activation matrix", () => {
           { ordinal: 1, provider: "a", model: "m1", status: 503, usage: { inputTokens: 7, outputTokens: 1 } },
           { ordinal: 2, provider: "b", model: "m2", status: 200, usage: { inputTokens: 2, outputTokens: 1 } },
         ],
+      });
+    }
+  });
+
+  test("preserves parent identity when a combo target completes", async () => {
+    const target = serve(() => chatSuccess("identity target", "m1"));
+    const config = comboConfig({
+      target: provider("openai-chat", baseUrl(target), "key-target"),
+    });
+    const response = await postLogged(
+      config,
+      {
+        parent_thread_id: "root-session",
+        reasoning: { effort: "medium" },
+      },
+      {},
+      {
+        "x-codex-session-id": "execution-session",
+        "x-openai-subagent": "collab_spawn",
+        "x-codex-turn-metadata": JSON.stringify({
+          request_kind: "agent_turn",
+          subagent_kind: "thread_spawn",
+        }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(JSON.stringify(await response.json())).toContain("identity target");
+    const { log, usage } = await latestAttemptReceipts(config);
+
+    for (const receipt of [log, usage]) {
+      expect(receipt).toMatchObject({
+        provider: "combo",
+        model: "combo/free",
+        requestedModel: "combo/free",
+        executionSessionId: "execution-session",
+        parentThreadId: "root-session",
+        rootSessionId: "root-session",
+        requestKind: "agent_turn",
+        subagentKind: "collab_spawn",
+        isSpawnedChild: true,
+        attempts: [{ provider: "target", model: "m1", status: 200 }],
       });
     }
   });

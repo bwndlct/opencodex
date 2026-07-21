@@ -27,6 +27,38 @@ afterEach(() => {
 });
 
 describe("usage log", () => {
+  test("roundtrips validated request identity fields", () => {
+    appendUsageEntry({
+      requestId: "ocx-identity",
+      timestamp: 1,
+      provider: "zai-anthropic",
+      model: "glm-5.2",
+      executionSessionId: " child-session ",
+      parentThreadId: "root-session",
+      rootSessionId: "root-session",
+      requestKind: "agent_turn",
+      subagentKind: "collab_spawn",
+      isSpawnedChild: true,
+      requestedModel: "zai-anthropic/glm-5.2",
+      requestedEffort: "high",
+      status: 200,
+      durationMs: 20,
+      usageStatus: "reported",
+      usage: { inputTokens: 10, outputTokens: 5 },
+    });
+
+    expect(readUsageEntries()[0]).toMatchObject({
+      executionSessionId: "child-session",
+      parentThreadId: "root-session",
+      rootSessionId: "root-session",
+      requestKind: "agent_turn",
+      subagentKind: "collab_spawn",
+      isSpawnedChild: true,
+      requestedModel: "zai-anthropic/glm-5.2",
+      requestedEffort: "high",
+    });
+  });
+
   test("persists only canonical ordered attempt fields", () => {
     appendUsageEntry({
       requestId: "ocx-attempts",

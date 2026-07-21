@@ -82,6 +82,7 @@ import {
   type RequestLogContext,
 } from "./request-log";
 import type { AttemptRecoveryKind } from "../usage/log";
+import { requestIdentityFrom } from "./request-identity";
 import {
   consumeForInspection,
   consumeForResponseLogMetadata,
@@ -757,6 +758,7 @@ export async function handleResponses(
   } catch (err) {
     return decodeRequestErrorResponse(err, "responses");
   }
+  Object.assign(logCtx, requestIdentityFrom(req.headers, body));
   const comboId = !options.comboAttempt ? comboIdFromRawBody(body) : null;
   if (comboId && Object.hasOwn(config.combos ?? {}, comboId)) {
     return handleComboResponses(req, body, comboId, config, logCtx, options);
@@ -788,6 +790,7 @@ export async function handleResponses(
   } catch (err) {
     return formatErrorResponse(400, "invalid_request_error", err instanceof Error ? err.message : String(err));
   }
+  const originalRequestedModelId = parsed.modelId;
   logCtx.requestedModel = parsed.modelId;
   logCtx.requestedEffort = parsed.options.reasoning;
   logCtx.requestedServiceTier = parsed.options.serviceTier;
@@ -897,14 +900,13 @@ export async function handleResponses(
   // receive `max` when the user picks Ultra (codex converts ultra->max client-side).
   // Clamp to the model's highest real effort BEFORE any adapter — the ChatGPT
   // passthrough serializes _rawBody verbatim, so both shapes must be rewritten.
-  // GUARD: judge nativeness by the ORIGINALLY REQUESTED id (logCtx.requestedModel),
+  // GUARD: judge nativeness by the ORIGINALLY REQUESTED id,
   // never by route.modelId — routing strips the "<provider>/" namespace, so a routed
   // model (anthropic/claude-opus-4-6, real max) would masquerade as an off-snapshot
   // bare native and get wrongly clamped. Routed efforts belong to their adapters.
   {
-    const requestedModelId = logCtx.requestedModel ?? route.modelId;
     const { nativeEffortClamp } = await import("../codex/catalog");
-    const clamped = requestedModelId.includes("/")
+    const clamped = originalRequestedModelId.includes("/")
       ? null
       : nativeEffortClamp(route.modelId, parsed.options.reasoning);
     if (clamped) {

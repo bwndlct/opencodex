@@ -16,6 +16,7 @@ import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../types";
 import { modelInList } from "../types";
 import { codexEffortRank, configuredReasoningEfforts, isCodexReasoningEffort, modelRecordValue } from "../reasoning-effort";
 import { catalogModelEfforts } from "../codex/catalog";
+import { isSpawnedChildRequest } from "./request-identity";
 
 /**
  * True when the request carries codex-rs's spawned-child markers, matched EXACTLY.
@@ -31,15 +32,7 @@ import { catalogModelEfforts } from "../codex/catalog";
  * not spawned children, and must never trip subagentEffortCap.
  */
 export function isThreadSpawnRequest(headers: Headers): boolean {
-  if (headers.get("x-openai-subagent") === "collab_spawn") return true;
-  const turnMeta = headers.get("x-codex-turn-metadata");
-  if (!turnMeta) return false;
-  try {
-    const parsed = JSON.parse(turnMeta) as { subagent_kind?: unknown };
-    return parsed.subagent_kind === "thread_spawn";
-  } catch {
-    return false;
-  }
+  return isSpawnedChildRequest(headers);
 }
 
 /** The effective ceiling for this turn, or undefined when no configured cap applies. */

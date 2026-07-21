@@ -32,6 +32,12 @@ export interface RequestLogContext {
   /** TTFT: ms from request start to the first non-empty model output delta (WP4, devlog 040). */
   firstOutputMs?: number;
   surface?: "claude";
+  executionSessionId?: string;
+  parentThreadId?: string;
+  rootSessionId?: string;
+  requestKind?: string;
+  subagentKind?: string;
+  isSpawnedChild?: boolean;
   requestedModel?: string;
   requestedEffort?: string;
   requestedServiceTier?: string;
@@ -70,6 +76,12 @@ export interface RequestLogEntry {
   /** TTFT: ms from request start to the first non-empty model output delta; unset for non-streaming/tool-only. */
   firstOutputMs?: number;
   surface?: "claude";
+  executionSessionId?: string;
+  parentThreadId?: string;
+  rootSessionId?: string;
+  requestKind?: string;
+  subagentKind?: string;
+  isSpawnedChild?: boolean;
   requestedModel?: string;
   requestedEffort?: string;
   requestedServiceTier?: string;
@@ -117,8 +129,15 @@ export function addRequestLog(entry: RequestLogEntry) {
       provider: entry.provider,
       model: entry.model,
       ...(entry.surface === "claude" ? { surface: entry.surface } : {}),
+      ...(entry.executionSessionId ? { executionSessionId: entry.executionSessionId } : {}),
+      ...(entry.parentThreadId ? { parentThreadId: entry.parentThreadId } : {}),
+      ...(entry.rootSessionId ? { rootSessionId: entry.rootSessionId } : {}),
+      ...(entry.requestKind ? { requestKind: entry.requestKind } : {}),
+      ...(entry.subagentKind ? { subagentKind: entry.subagentKind } : {}),
+      ...(entry.isSpawnedChild !== undefined ? { isSpawnedChild: entry.isSpawnedChild } : {}),
       ...(entry.resolvedModel ? { resolvedModel: entry.resolvedModel } : {}),
       ...(entry.requestedModel ? { requestedModel: entry.requestedModel } : {}),
+      ...(entry.requestedEffort ? { requestedEffort: entry.requestedEffort } : {}),
       status: entry.status,
       durationMs: entry.durationMs,
       ...(entry.firstOutputMs !== undefined ? { firstOutputMs: entry.firstOutputMs } : {}),
@@ -470,6 +489,12 @@ export function addFinalRequestLog(
     model: isCombo ? logCtx.requestedModel! : logCtx.model,
     provider: isCombo ? "combo" : logCtx.provider,
     ...(logCtx.surface ? { surface: logCtx.surface } : {}),
+    ...(logCtx.executionSessionId ? { executionSessionId: logCtx.executionSessionId } : {}),
+    ...(logCtx.parentThreadId ? { parentThreadId: logCtx.parentThreadId } : {}),
+    ...(logCtx.rootSessionId ? { rootSessionId: logCtx.rootSessionId } : {}),
+    ...(logCtx.requestKind ? { requestKind: logCtx.requestKind } : {}),
+    ...(logCtx.subagentKind ? { subagentKind: logCtx.subagentKind } : {}),
+    ...(logCtx.isSpawnedChild !== undefined ? { isSpawnedChild: logCtx.isSpawnedChild } : {}),
     ...(logCtx.requestedModel ? { requestedModel: logCtx.requestedModel } : {}),
     ...(logCtx.requestedEffort ? { requestedEffort: logCtx.requestedEffort } : {}),
     ...(logCtx.requestedServiceTier ? { requestedServiceTier: logCtx.requestedServiceTier } : {}),

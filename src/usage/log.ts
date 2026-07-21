@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { getConfigDir } from "../config";
 import { usageDisplayTotalTokens } from "./totals";
 import type { OcxUsage } from "../types";
+import { sanitizeIdentityValue } from "../server/request-identity";
 
 export type UsageStatus = "reported" | "unreported" | "unsupported" | "estimated";
 
@@ -37,8 +38,15 @@ export interface PersistedUsageEntry {
   provider: string;
   model: string;
   surface?: "claude";
+  executionSessionId?: string;
+  parentThreadId?: string;
+  rootSessionId?: string;
+  requestKind?: string;
+  subagentKind?: string;
+  isSpawnedChild?: boolean;
   resolvedModel?: string;
   requestedModel?: string;
+  requestedEffort?: string;
   status: number;
   durationMs: number;
   /** TTFT relative to the request start (WP4); unset for non-streaming/tool-only. */
@@ -199,14 +207,28 @@ function normalizedAttempts(raw: unknown): PersistedUsageAttempt[] {
 
 function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   const attempts = normalizedAttempts(entry.attempts);
+  const executionSessionId = sanitizeIdentityValue(entry.executionSessionId);
+  const parentThreadId = sanitizeIdentityValue(entry.parentThreadId);
+  const rootSessionId = sanitizeIdentityValue(entry.rootSessionId);
+  const requestKind = sanitizeIdentityValue(entry.requestKind);
+  const subagentKind = sanitizeIdentityValue(entry.subagentKind);
+  const requestedModel = sanitizeIdentityValue(entry.requestedModel);
+  const requestedEffort = sanitizeIdentityValue(entry.requestedEffort);
   return {
     requestId: entry.requestId,
     timestamp: entry.timestamp,
     provider: entry.provider,
     model: entry.model,
     ...(entry.surface === "claude" ? { surface: entry.surface } : {}),
+    ...(executionSessionId ? { executionSessionId } : {}),
+    ...(parentThreadId ? { parentThreadId } : {}),
+    ...(rootSessionId ? { rootSessionId } : {}),
+    ...(requestKind ? { requestKind } : {}),
+    ...(subagentKind ? { subagentKind } : {}),
+    ...(typeof entry.isSpawnedChild === "boolean" ? { isSpawnedChild: entry.isSpawnedChild } : {}),
     ...(entry.resolvedModel ? { resolvedModel: entry.resolvedModel } : {}),
-    ...(entry.requestedModel ? { requestedModel: entry.requestedModel } : {}),
+    ...(requestedModel ? { requestedModel } : {}),
+    ...(requestedEffort ? { requestedEffort } : {}),
     status: entry.status,
     durationMs: entry.durationMs,
     ...(isNonNegativeFiniteNumber(entry.firstOutputMs)

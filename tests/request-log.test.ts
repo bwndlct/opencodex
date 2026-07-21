@@ -33,6 +33,33 @@ function log(overrides: Partial<RequestLogEntry>): RequestLogEntry {
 }
 
 describe("request log metadata", () => {
+  test("projects request identity into the final request log entry", () => {
+    const captured: RequestLogEntry[] = [];
+    addFinalRequestLog("ocx-identity", 0, {
+      model: "glm-5.2",
+      provider: "zai-anthropic",
+      executionSessionId: "child-session",
+      parentThreadId: "root-session",
+      rootSessionId: "root-session",
+      requestKind: "agent_turn",
+      subagentKind: "collab_spawn",
+      isSpawnedChild: true,
+      requestedModel: "zai-anthropic/glm-5.2",
+      requestedEffort: "high",
+    }, 200, undefined, entry => captured.push(entry));
+
+    expect(captured[0]).toMatchObject({
+      executionSessionId: "child-session",
+      parentThreadId: "root-session",
+      rootSessionId: "root-session",
+      requestKind: "agent_turn",
+      subagentKind: "collab_spawn",
+      isSpawnedChild: true,
+      requestedModel: "zai-anthropic/glm-5.2",
+      requestedEffort: "high",
+    });
+  });
+
   test("recordFirstOutput is one-shot for request and active attempt (WP4 TTFT)", () => {
     const attempt = beginRequestAttempt(1, "a", "m1", "openai-chat");
     const logCtx: RequestLogContext = {

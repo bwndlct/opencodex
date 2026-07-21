@@ -13,7 +13,7 @@ import { expandUserPath, getConfigDir, readPid, removePid, removeRuntimePort } f
 import { loadConfig } from "./config";
 import { restoreNativeCodex } from "./codex/inject";
 import { isWslRuntime } from "./codex/home";
-import { durableBunPath, durableBunRuntime } from "./lib/bun-runtime";
+import { durableBunPath } from "./lib/bun-runtime";
 import { isProcessAlive, stopProxy } from "./lib/process-control";
 import { serviceApiTokenFilePath } from "./lib/service-secrets";
 import { defaultWinswEntry, installWinswService, startWinswService, stopWinswService, statusWinswRaw, uninstallWinswService, winswStatusSummary, WINSW_SERVICE_ID, WINSW_SHA256, WINSW_VERSION } from "./lib/winsw";
@@ -203,7 +203,6 @@ function writeServiceApiTokenFile(): string | null {
 
 export function buildPlist(): string {
   const { bun, cli } = cliEntry();
-  const log = logPath();
   const path = process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin";
   const codexHome = process.env.CODEX_HOME?.trim();
   const opencodexHome = process.env.OPENCODEX_HOME?.trim();
@@ -231,8 +230,8 @@ export function buildPlist(): string {
   <dict>
 ${envLines}
   </dict>
-  <key>StandardOutPath</key><string>${plistString(log)}</string>
-  <key>StandardErrorPath</key><string>${plistString(log)}</string>
+  <key>StandardOutPath</key><string>/dev/null</string>
+  <key>StandardErrorPath</key><string>/dev/null</string>
 </dict>
 </plist>
 `;
@@ -243,8 +242,7 @@ function shellQuote(value: string): string {
 }
 
 function buildServiceShellCommand(bun: string, cli: string): string {
-  const tokenFile = serviceApiTokenFilePath();
-  return `if [ -f ${shellQuote(tokenFile)} ]; then OPENCODEX_API_AUTH_TOKEN="$(cat ${shellQuote(tokenFile)})"; export OPENCODEX_API_AUTH_TOKEN; fi; exec ${shellQuote(bun)} ${shellQuote(cli)} start`;
+  return `exec ${shellQuote(bun)} ${shellQuote(cli)} service-runner`;
 }
 
 function systemdQuote(value: string): string {
@@ -258,12 +256,6 @@ function systemdQuote(value: string): string {
 function systemdEnvironmentAssignment(name: string, value: string | undefined): string | null {
   if (!value) return null;
   return `Environment=${systemdQuote(`${name}=${value}`)}`;
-}
-
-function systemdOutputTarget(value: string): string {
-  // StandardOutput/StandardError use output specifiers such as append:/path.
-  // Quoting the full specifier makes systemd reject it as an invalid output target.
-  return value.replace(/%/g, "%%").replace(/\n/g, "\\n");
 }
 
 function sh(cmd: string): string {
@@ -318,7 +310,6 @@ function taskXmlString(value: string): string {
 
 export function buildWindowsServiceScript(entry = cliEntry()): string {
   const { bun, cli } = entry;
-  const bunRuntime = durableBunRuntime();
   const path = process.env.PATH ?? "";
   const lines = [
     "@echo off",
@@ -331,23 +322,11 @@ export function buildWindowsServiceScript(entry = cliEntry()): string {
     windowsBatchSet("CODEX_HOME", process.env.CODEX_HOME?.trim(), "path"),
     windowsBatchSet("OPENCODEX_HOME", process.env.OPENCODEX_HOME?.trim(), "path"),
     windowsBatchSet("OCX_API_TOKEN_FILE", serviceApiTokenFilePath(), "path"),
-    windowsBatchSet("OCX_SERVICE_LOG", serviceLogPath(), "path"),
     windowsBatchSet("OCX_BUN", bun, "path"),
     windowsBatchSet("OCX_CLI", cli, "path"),
-    'if exist "%OCX_API_TOKEN_FILE%" (',
-    '  set /p OPENCODEX_API_AUTH_TOKEN=<"%OCX_API_TOKEN_FILE%"',
-    ")",
     ":loop",
-    '>>"%OCX_SERVICE_LOG%" echo [%DATE% %TIME%] opencodex service wrapper start',
-    '>>"%OCX_SERVICE_LOG%" echo bun="%OCX_BUN%"',
-    `>>"%OCX_SERVICE_LOG%" echo bun_source="${bunRuntime.source}"`,
-    '>>"%OCX_SERVICE_LOG%" echo cli="%OCX_CLI%"',
-    '>>"%OCX_SERVICE_LOG%" echo opencodex_home="%OPENCODEX_HOME%"',
-    '>>"%OCX_SERVICE_LOG%" echo codex_home="%CODEX_HOME%"',
-    '>>"%OCX_SERVICE_LOG%" echo token_file="%OCX_API_TOKEN_FILE%"',
-    '"%OCX_BUN%" "%OCX_CLI%" start >>"%OCX_SERVICE_LOG%" 2>&1',
+    '"%OCX_BUN%" "%OCX_CLI%" service-runner',
     "if %ERRORLEVEL% NEQ 0 (",
-    '  >>"%OCX_SERVICE_LOG%" echo [%DATE% %TIME%] child exited with code %ERRORLEVEL%; restarting in 5s',
     // `timeout` needs console stdin and dies with "Input redirection is not supported"
     // under Task Scheduler, turning the 5s cooldown into a hot restart loop; ping doesn't.
     "  ping -n 6 127.0.0.1 >nul",
@@ -577,7 +556,6 @@ function unitPath(): string {
 
 export function buildUnit(): string {
   const { bun, cli } = cliEntry();
-  const log = logPath();
   const path = process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin";
   const codexHome = systemdEnvironmentAssignment("CODEX_HOME", process.env.CODEX_HOME?.trim());
   const opencodexHome = systemdEnvironmentAssignment("OPENCODEX_HOME", process.env.OPENCODEX_HOME?.trim());
@@ -598,8 +576,8 @@ ExecStart=${systemdQuote("/bin/sh")} -lc ${systemdQuote(buildServiceShellCommand
 Restart=on-failure
 RestartSec=5
 ${envLines}
-StandardOutput=${systemdOutputTarget(`append:${log}`)}
-StandardError=${systemdOutputTarget(`append:${log}`)}
+StandardOutput=null
+StandardError=null
 
 [Install]
 WantedBy=default.target

@@ -64,13 +64,14 @@ describe("systemd service unit", () => {
     expect(serviceCommand).toContain("switch (command)");
   });
 
-  test("uses unquoted append targets for service logs", () => {
+  test("delegates logging to the service runner instead of systemd file append", () => {
     const unit = buildUnit();
 
-    expect(unit).toContain("StandardOutput=append:");
-    expect(unit).toContain("StandardError=append:");
-    expect(unit).not.toContain('StandardOutput="append:');
-    expect(unit).not.toContain('StandardError="append:');
+    expect(unit).toContain("service-runner");
+    expect(unit).toContain("StandardOutput=null");
+    expect(unit).toContain("StandardError=null");
+    expect(unit).not.toContain("append:");
+    expect(pathVariants(serviceLogPath()).some(candidate => unit.includes(candidate))).toBe(false);
   });
 
   test("preserves custom Codex and OpenCodex homes", () => {
@@ -84,7 +85,7 @@ describe("systemd service unit", () => {
       const unit = buildUnit();
       expect(unit).toContain('Environment="CODEX_HOME=/tmp/codex-home"');
       expect(unit).toContain('Environment="OPENCODEX_HOME=/tmp/opencodex-home"');
-      expectTextToContainPath(unit, serviceApiTokenFilePath());
+      expect(unit).toContain("service-runner");
       expect(unit).not.toContain("local-secret");
       expect(unit).not.toContain("Environment=\"OPENCODEX_API_AUTH_TOKEN=");
     } finally {
@@ -247,7 +248,7 @@ describe("Windows service task", () => {
       expect(script).toContain('set "PATH=C:\\safe & echo PWNED & rem "');
       expect(script).toContain('set "OPENCODEX_HOME=C:\\ocx & del C:\\important & rem "');
       expect(script).toContain('set "OCX_API_TOKEN_FILE=');
-      expect(script).toContain('set /p OPENCODEX_API_AUTH_TOKEN=<"%OCX_API_TOKEN_FILE%"');
+      expect(script).not.toContain("set /p OPENCODEX_API_AUTH_TOKEN");
       expect(script).not.toContain('set "PATH=C:\\safe" & echo PWNED');
       expect(script).not.toContain('set "OPENCODEX_HOME=C:\\ocx" & del');
       expect(script).not.toContain("token & echo LEAK");
@@ -269,7 +270,7 @@ describe("Windows service task", () => {
 
     expect(script).toContain('set "OCX_BUN=C:\\Bun&Dir\\100%%bun^^\\bun.exe"');
     expect(script).toContain('set "OCX_CLI=C:\\OpenCodex&Dir\\cli.ts"');
-    expect(script).toContain('"%OCX_BUN%" "%OCX_CLI%" start');
+    expect(script).toContain('"%OCX_BUN%" "%OCX_CLI%" service-runner');
     expect(script).not.toContain('"C:\\Bun&Dir\\100%bun^\\bun.exe"');
   });
 
@@ -304,7 +305,7 @@ describe("Windows service task", () => {
     }
   });
 
-  test("writes token-safe startup identity and child output to the service log", () => {
+  test("delegates token-safe child logging to the service runner", () => {
     const oldCodexHome = process.env.CODEX_HOME;
     const oldOpenCodexHome = process.env.OPENCODEX_HOME;
     const oldApiAuthToken = process.env.OPENCODEX_API_AUTH_TOKEN;
@@ -317,17 +318,12 @@ describe("Windows service task", () => {
         cli: "C:\\OpenCodex\\cli.ts",
       });
 
-      expectTextToContainPath(script, serviceLogPath());
-      expect(script).toContain('set "OCX_SERVICE_LOG=');
-      expect(script).toContain("opencodex service wrapper start");
-      expect(script).toContain('echo bun="%OCX_BUN%"');
-      expect(script).toContain('echo bun_source="');
-      expect(script).toContain('echo cli="%OCX_CLI%"');
-      expect(script).toContain('echo opencodex_home="%OPENCODEX_HOME%"');
-      expect(script).toContain('echo codex_home="%CODEX_HOME%"');
-      expect(script).toContain('echo token_file="%OCX_API_TOKEN_FILE%"');
-      expect(script).toContain('"%OCX_BUN%" "%OCX_CLI%" start >>"%OCX_SERVICE_LOG%" 2>&1');
-      expect(script).toContain("child exited with code %ERRORLEVEL%");
+      expect(script).toContain('set "OCX_API_TOKEN_FILE=');
+      expect(script).toContain('"%OCX_BUN%" "%OCX_CLI%" service-runner');
+      expect(script).not.toContain("OCX_SERVICE_LOG");
+      expect(script).not.toContain(" >>");
+      expect(script).not.toContain(" 2>&1");
+      expect(script).not.toContain("echo token_file");
       expect(script).not.toContain("local-secret");
       expect(script).not.toContain('set "OPENCODEX_API_AUTH_TOKEN=');
     } finally {
@@ -353,7 +349,9 @@ describe("launchd service plist", () => {
       const plist = buildPlist();
       expect(plist).toContain("<key>CODEX_HOME</key><string>/tmp/codex-home</string>");
       expect(plist).toContain("<key>OPENCODEX_HOME</key><string>/tmp/opencodex-home</string>");
-      expectTextToContainPath(plist, serviceApiTokenFilePath());
+      expect(plist).toContain("service-runner");
+      expect(plist).toContain("<key>StandardOutPath</key><string>/dev/null</string>");
+      expect(plist).toContain("<key>StandardErrorPath</key><string>/dev/null</string>");
       expect(plist).not.toContain("local-secret");
       expect(plist).not.toContain("<key>OPENCODEX_API_AUTH_TOKEN</key>");
     } finally {

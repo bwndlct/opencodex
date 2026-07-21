@@ -26,6 +26,7 @@ import { findAvailablePort, isAddrInUse, shouldPersistSelectedPort } from "../se
 import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-liveness";
 import { stopProxy } from "../lib/process-control";
 import { loadServiceTokenFromFile } from "../lib/service-secrets";
+import { runServiceLogSupervisor } from "../lib/service-log-supervisor";
 import { serviceCommand, serviceStatusSummary, stopServiceIfInstalled, uninstallServiceIfInstalled } from "../service";
 import { drainAndShutdown, startServer } from "../server";
 import { injectSystemEnv, revertSystemEnv } from "../server/system-env";
@@ -456,6 +457,9 @@ switch (command) {
   }
   case "start":
     await handleStart();
+    break;
+  case "service-runner":
+    process.exitCode = await runServiceLogSupervisor();
     break;
   case "stop":
     await handleStop();

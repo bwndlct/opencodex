@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { formatCrashEntry, installCrashGuards, isBenignAbortTeardown } from "../src/lib/crash-guard";
+import { appendCrashLogEntry, formatCrashEntry, installCrashGuards, isBenignAbortTeardown } from "../src/lib/crash-guard";
 import { sidecarEnter } from "../src/lib/sidecar-tracker";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 describe("crash-guard diagnostics", () => {
   test("surfaces the JSC throw site from hidden source fields when the stack is native-only", () => {
@@ -81,6 +84,61 @@ describe("crash-guard diagnostics", () => {
       expect(entry).toContain("last=web-search");
     } finally {
       exit();
+    }
+  });
+});
+
+describe("crash log retention", () => {
+  test("rotates synchronously, bounds legacy files, and leaves unknown siblings alone", () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-crash-log-"));
+    const path = join(root, "logs", "crash.log");
+    try {
+      appendCrashLogEntry(path, "0123456789", { maxBytes: 5, backupCount: 2 });
+      appendCrashLogEntry(path, "abc", { maxBytes: 5, backupCount: 2 });
+      appendCrashLogEntry(path, "DEF", { maxBytes: 5, backupCount: 2 });
+
+      expect(readFileSync(path, "utf8")).toBe("DEF");
+      expect(readFileSync(`${path}.1`, "utf8")).toBe("abc");
+      expect(readFileSync(`${path}.2`, "utf8")).toBe("01234");
+      for (const managed of [path, `${path}.1`, `${path}.2`]) expect(statSync(managed).size).toBeLessThanOrEqual(5);
+
+      writeFileSync(`${path}.9`, "unknown");
+      appendCrashLogEntry(path, "GHI", { maxBytes: 5, backupCount: 2 });
+      expect(readFileSync(`${path}.9`, "utf8")).toBe("unknown");
+      if (process.platform !== "win32") {
+        expect(statSync(join(root, "logs")).mode & 0o777).toBe(0o700);
+        expect(statSync(path).mode & 0o777).toBe(0o600);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("truncates one huge entry and supports zero backups", () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-crash-log-"));
+    const path = join(root, "crash.log");
+    try {
+      appendCrashLogEntry(path, "x".repeat(100), { maxBytes: 32, backupCount: 0 });
+      expect(statSync(path).size).toBe(32);
+      expect(readFileSync(path, "utf8")).toContain("truncated");
+      appendCrashLogEntry(path, "next", { maxBytes: 32, backupCount: 0 });
+      expect(readFileSync(path, "utf8")).toBe("next");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rehardens an existing permissive file", () => {
+    if (process.platform === "win32") return;
+    const root = mkdtempSync(join(tmpdir(), "ocx-crash-log-"));
+    const path = join(root, "crash.log");
+    try {
+      writeFileSync(path, "old", { mode: 0o666 });
+      chmodSync(path, 0o666);
+      appendCrashLogEntry(path, "new", { maxBytes: 32, backupCount: 1 });
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });

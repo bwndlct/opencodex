@@ -1,5 +1,6 @@
+// Goal: verify usage JSONL retention and migration behavior without changing accounting fields.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -13,6 +14,8 @@ import {
 
 let testDir = "";
 let previousHome: string | undefined;
+const FIXED_NOW = new Date(2026, 6, 21, 12, 0, 0);
+const FIXED_DATE = "2026-07-21";
 
 beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
@@ -25,6 +28,35 @@ afterEach(() => {
   else process.env.OPENCODEX_HOME = previousHome;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
 });
+
+function legacyUsagePath(): string {
+  return join(testDir, "usage.jsonl");
+}
+
+function shardPath(date: string): string {
+  return join(testDir, "usage", `${date}.jsonl`);
+}
+
+function writeLegacyLines(lines: string[]): void {
+  writeFileSync(legacyUsagePath(), `${lines.join("\n")}\n`);
+}
+
+function writeShardLines(date: string, lines: string[]): void {
+  mkdirSync(join(testDir, "usage"), { recursive: true });
+  writeFileSync(shardPath(date), `${lines.join("\n")}\n`, { mode: 0o600 });
+}
+
+function usageLine(requestId: string, timestamp = FIXED_NOW.getTime()): string {
+  return JSON.stringify({
+    requestId,
+    timestamp,
+    provider: "openai",
+    model: "gpt-5.5",
+    status: 200,
+    durationMs: 1,
+    usageStatus: "unreported",
+  });
+}
 
 describe("usage log", () => {
   test("roundtrips validated request identity fields", () => {
@@ -147,7 +179,7 @@ describe("usage log", () => {
       { ...valid(2), usage: { inputTokens: 2, outputTokens: "1" } },
     ];
     for (const middle of malformed) {
-      writeFileSync(usageLogPath(), `${JSON.stringify({
+      writeShardLines(FIXED_DATE, [JSON.stringify({
         requestId: "parent",
         timestamp: 1,
         provider: "combo",
@@ -158,8 +190,8 @@ describe("usage log", () => {
         usage: { inputTokens: 4, outputTokens: 2 },
         totalTokens: 6,
         attempts: [valid(1), middle, valid(3)],
-      })}\n`);
-      const [entry] = readUsageEntries();
+      })]);
+      const [entry] = readUsageEntries(FIXED_NOW);
       expect(entry?.requestId).toBe("parent");
       expect(entry?.attempts?.map(attempt => attempt.ordinal)).toEqual([1, 3]);
     }
@@ -220,7 +252,7 @@ describe("usage log", () => {
   });
 
   test("legacy lines without firstOutputMs stay readable and unset", () => {
-    writeFileSync(usageLogPath(), `${JSON.stringify({
+    writeLegacyLines([JSON.stringify({
       requestId: "legacy",
       timestamp: 1,
       provider: "a",
@@ -229,14 +261,14 @@ describe("usage log", () => {
       durationMs: 5,
       usageStatus: "reported",
       usage: { inputTokens: 1, outputTokens: 1 },
-    })}\n`);
+    })]);
     const [entry] = readUsageEntries();
     expect(entry?.requestId).toBe("legacy");
     expect(entry).not.toHaveProperty("firstOutputMs");
   });
 
   test("ignores malformed attempt arrays and keeps legacy parents readable", () => {
-    writeFileSync(usageLogPath(), [
+    writeLegacyLines([
       JSON.stringify({
         requestId: "bad-attempt-array",
         timestamp: 1,
@@ -258,7 +290,7 @@ describe("usage log", () => {
         usage: { inputTokens: 1, outputTokens: 2 },
         totalTokens: 3,
       }),
-    ].join("\n"));
+    ]);
     const entries = readUsageEntries();
     expect(entries).toHaveLength(2);
     expect(entries[0]).not.toHaveProperty("attempts");
@@ -276,7 +308,80 @@ describe("usage log", () => {
   });
 
   test("uses OPENCODEX_HOME for the append-only JSONL path", () => {
-    expect(usageLogPath()).toBe(join(testDir, "usage.jsonl"));
+    expect(usageLogPath(FIXED_NOW)).toBe(shardPath(FIXED_DATE));
+  });
+
+  test("writes a local-date shard and hardens its directory and file", () => {
+    appendUsageEntry({
+      requestId: "ocx-daily-shard",
+      timestamp: FIXED_NOW.getTime(),
+      provider: "openai",
+      model: "gpt-5.5",
+      status: 200,
+      durationMs: 1,
+      usageStatus: "unreported",
+    }, FIXED_NOW);
+
+    expect(existsSync(shardPath(FIXED_DATE))).toBe(true);
+    if (process.platform !== "win32") {
+      expect((statSync(join(testDir, "usage")).mode & 0o777).toString(8)).toBe("700");
+      expect((statSync(shardPath(FIXED_DATE)).mode & 0o777).toString(8)).toBe("600");
+    }
+  });
+
+  test("reads legacy and retained shards in deterministic order without rewriting legacy", () => {
+    const legacyLines = [usageLine("legacy-first"), "{not-json", usageLine("legacy-second")];
+    writeLegacyLines(legacyLines);
+    writeShardLines("2026-07-21", [usageLine("shard-current")]);
+    writeShardLines("2026-07-19", [usageLine("shard-oldest")]);
+    writeShardLines("2026-07-20", [usageLine("shard-middle")]);
+
+    expect(readUsageEntries(FIXED_NOW).map(entry => entry.requestId)).toEqual([
+      "legacy-first",
+      "legacy-second",
+      "shard-oldest",
+      "shard-middle",
+      "shard-current",
+    ]);
+    expect(readFileSync(legacyUsagePath(), "utf-8")).toBe(`${legacyLines.join("\n")}\n`);
+  });
+
+  test("retains the cutoff shard, deletes old strict shards, and preserves unknown entries", () => {
+    writeShardLines("2026-06-20", [usageLine("too-old")]);
+    writeShardLines("2026-06-21", [usageLine("cutoff-day")]);
+    writeShardLines("2026-06-22", [usageLine("retained")]);
+    writeShardLines("2026-06-20.txt", [usageLine("unknown-suffix")]);
+    writeShardLines("not-a-date", [usageLine("unknown-name")]);
+    writeShardLines("2026-02-30", [usageLine("invalid-date")]);
+    mkdirSync(shardPath("2026-06-19"));
+
+    appendUsageEntry({
+      requestId: "ocx-prune-trigger",
+      timestamp: FIXED_NOW.getTime(),
+      provider: "openai",
+      model: "gpt-5.5",
+      status: 200,
+      durationMs: 1,
+      usageStatus: "unreported",
+    }, FIXED_NOW);
+
+    expect(existsSync(shardPath("2026-06-20"))).toBe(false);
+    for (const retained of ["2026-06-21", "2026-06-22", "2026-06-20.txt", "not-a-date", "2026-02-30"]) {
+      expect(existsSync(shardPath(retained))).toBe(true);
+    }
+    expect(existsSync(shardPath("2026-06-19"))).toBe(true);
+
+    writeShardLines("2026-06-18", [usageLine("created-after-prune")]);
+    appendUsageEntry({
+      requestId: "ocx-prune-second-write",
+      timestamp: FIXED_NOW.getTime(),
+      provider: "openai",
+      model: "gpt-5.5",
+      status: 200,
+      durationMs: 1,
+      usageStatus: "unreported",
+    }, FIXED_NOW);
+    expect(existsSync(shardPath("2026-06-18"))).toBe(true);
   });
 
   test("appends secret-safe usage entries and reads them back", () => {
@@ -373,13 +478,13 @@ describe("usage log", () => {
   });
 
   test("skips malformed JSONL lines while keeping valid entries", () => {
-    writeFileSync(usageLogPath(), [
+    writeShardLines(FIXED_DATE, [
       "{\"requestId\":\"a\",\"timestamp\":1,\"provider\":\"p\",\"model\":\"m\",\"status\":200,\"durationMs\":1,\"usageStatus\":\"unreported\"}",
       "{not-json",
       "{\"requestId\":\"b\",\"timestamp\":2,\"provider\":\"p\",\"model\":\"m\",\"status\":200,\"durationMs\":1,\"usageStatus\":\"reported\",\"usage\":{\"inputTokens\":1,\"outputTokens\":2},\"totalTokens\":3}",
-    ].join("\n"));
+    ]);
 
-    expect(readUsageEntries().map(entry => entry.requestId)).toEqual(["a", "b"]);
+    expect(readUsageEntries(FIXED_NOW).map(entry => entry.requestId)).toEqual(["a", "b"]);
   });
 
   test("keeps missing usage distinct from zero usage", () => {

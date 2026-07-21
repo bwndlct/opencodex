@@ -211,6 +211,7 @@ describe("OpenAI provider-option integration spine", () => {
         websocketRegistry,
         requestLog,
         catalog,
+        usageLog,
         serverModule,
         mainAccount,
         sidecar,
@@ -224,6 +225,7 @@ describe("OpenAI provider-option integration spine", () => {
         import("../src/codex/websocket-registry"),
         import("../src/server/request-log"),
         import("../src/codex/catalog"),
+        import("../src/usage/log"),
         import("../src/server"),
         import("../src/codex/main-account"),
         import("../src/providers/openai-sidecar"),
@@ -496,10 +498,7 @@ describe("OpenAI provider-option integration spine", () => {
         && row.model === "gpt-5.6-sol-pro"
         && row.requestedModel === selected
         && row.resolvedModel === "gpt-5.6-sol")).toBe(true);
-      const usageLines = existsSync(join(opencodexHome, "usage.jsonl"))
-        ? readFileSync(join(opencodexHome, "usage.jsonl"), "utf8").trim().split("\n").filter(Boolean)
-          .map(line => JSON.parse(line) as Record<string, unknown>)
-        : [];
+      const usageLines: Array<Record<string, unknown>> = usageLog.readUsageEntries();
       for (const expected of [
         { provider: "openai-p123abc", requestedModel: "gpt-5.6-sol", resolvedModel: "gpt-5.6-sol" },
         { provider: "openai", requestedModel: "gpt-5.6-sol", resolvedModel: "gpt-5.6-sol" },

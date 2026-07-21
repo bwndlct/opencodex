@@ -1,4 +1,12 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, appendFileSync } from "node:fs";
+import {
+  appendFileSync,
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  unlinkSync,
+} from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "../config";
 import { usageDisplayTotalTokens } from "./totals";
@@ -64,8 +72,58 @@ export interface PersistedUsageEntry {
   upstreamError?: string;
 }
 
-export function usageLogPath(): string {
+type UsageLogNow = Date | number;
+
+const USAGE_RETENTION_DAYS = 30;
+const USAGE_SHARD_NAME = /^(\d{4}-\d{2}-\d{2})\.jsonl$/;
+const lastPrunedUsageDay = new Map<string, string>();
+
+function usageDirPath(): string {
+  return join(getConfigDir(), "usage");
+}
+
+function legacyUsageLogPath(): string {
   return join(getConfigDir(), "usage.jsonl");
+}
+
+function normalizedUsageDate(now: UsageLogNow): Date {
+  const date = now instanceof Date ? new Date(now.getTime()) : new Date(now);
+  return Number.isNaN(date.getTime()) ? new Date() : date;
+}
+
+function localDateKey(now: UsageLogNow): string {
+  const date = normalizedUsageDate(now);
+  return [
+    date.getFullYear().toString().padStart(4, "0"),
+    (date.getMonth() + 1).toString().padStart(2, "0"),
+    date.getDate().toString().padStart(2, "0"),
+  ].join("-");
+}
+
+function localDateBefore(now: UsageLogNow, days: number): string {
+  const date = normalizedUsageDate(now);
+  date.setDate(date.getDate() - days);
+  return localDateKey(date);
+}
+
+function recognizedShardDate(fileName: string): string | undefined {
+  const match = USAGE_SHARD_NAME.exec(fileName);
+  if (!match) return undefined;
+  const date = new Date(
+    Number(match[1].slice(0, 4)),
+    Number(match[1].slice(5, 7)) - 1,
+    Number(match[1].slice(8, 10)),
+  );
+  if (date.getFullYear() !== Number(match[1].slice(0, 4))
+    || date.getMonth() !== Number(match[1].slice(5, 7)) - 1
+    || date.getDate() !== Number(match[1].slice(8, 10))) {
+    return undefined;
+  }
+  return match[1];
+}
+
+export function usageLogPath(now: UsageLogNow = Date.now()): string {
+  return join(usageDirPath(), `${localDateKey(now)}.jsonl`);
 }
 
 export function usageTotalTokens(usage: OcxUsage | undefined): number | undefined {
@@ -246,23 +304,35 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
 }
 
 function ensureUsageLogDir(): void {
-  const dir = getConfigDir();
+  const dir = usageDirPath();
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   try { chmodSync(dir, 0o700); } catch { /* best-effort on platforms that ignore chmod */ }
 }
 
-export function appendUsageEntry(entry: PersistedUsageEntry): void {
-  ensureUsageLogDir();
-  const path = usageLogPath();
-  appendFileSync(path, `${JSON.stringify(normalizeUsageEntry(entry))}\n`, { encoding: "utf-8", mode: 0o600 });
-  try { chmodSync(path, 0o600); } catch { /* best-effort on platforms that ignore chmod */ }
+function pruneUsageShards(now: UsageLogNow): void {
+  const dir = usageDirPath();
+  if (!existsSync(dir)) return;
+  const localDate = localDateKey(now);
+  if (lastPrunedUsageDay.get(dir) === localDate) return;
+  lastPrunedUsageDay.set(dir, localDate);
+
+  const cutoff = localDateBefore(now, USAGE_RETENTION_DAYS);
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const shardDate = recognizedShardDate(entry.name);
+    if (!shardDate || shardDate >= cutoff) continue;
+    try { unlinkSync(join(dir, entry.name)); } catch { /* best-effort retention */ }
+  }
 }
 
-export function readUsageEntries(): PersistedUsageEntry[] {
-  const path = usageLogPath();
-  if (!existsSync(path)) return [];
+function readUsageFile(path: string, entries: PersistedUsageEntry[]): void {
   const lines = readFileSync(path, "utf-8").split(/\r?\n/);
-  const entries: PersistedUsageEntry[] = [];
   for (const line of lines) {
     if (!line.trim()) continue;
     try {
@@ -273,6 +343,40 @@ export function readUsageEntries(): PersistedUsageEntry[] {
     } catch {
       /* keep reading after a partially written or hand-edited line */
     }
+  }
+}
+
+export function appendUsageEntry(entry: PersistedUsageEntry, now: UsageLogNow = Date.now()): void {
+  ensureUsageLogDir();
+  pruneUsageShards(now);
+  const path = usageLogPath(now);
+  appendFileSync(path, `${JSON.stringify(normalizeUsageEntry(entry))}\n`, { encoding: "utf-8", mode: 0o600 });
+  try { chmodSync(path, 0o600); } catch { /* best-effort on platforms that ignore chmod */ }
+}
+
+export function readUsageEntries(now: UsageLogNow = Date.now()): PersistedUsageEntry[] {
+  pruneUsageShards(now);
+  const entries: PersistedUsageEntry[] = [];
+  const legacyPath = legacyUsageLogPath();
+  if (existsSync(legacyPath)) readUsageFile(legacyPath, entries);
+
+  const cutoff = localDateBefore(now, USAGE_RETENTION_DAYS);
+  let directoryEntries;
+  try {
+    directoryEntries = readdirSync(usageDirPath(), { withFileTypes: true });
+  } catch {
+    if (existsSync(usageDirPath())) throw new Error("usage directory could not be read");
+    return entries;
+  }
+  const shardFiles = directoryEntries
+    .filter(entry => entry.isFile())
+    .map(entry => ({ name: entry.name, date: recognizedShardDate(entry.name) }))
+    .filter((entry): entry is { name: string; date: string } => (
+      typeof entry.date === "string" && entry.date >= cutoff
+    ))
+    .sort((left, right) => left.date.localeCompare(right.date));
+  for (const shard of shardFiles) {
+    try { readUsageFile(join(usageDirPath(), shard.name), entries); } catch { /* best-effort shard reads */ }
   }
   return entries;
 }

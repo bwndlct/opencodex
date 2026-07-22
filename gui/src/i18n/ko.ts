@@ -969,6 +969,8 @@ export const ko: Record<TKey, string> = {
   "sessions.summaryAria": "세션 요약",
   "sessions.active": "활성",
   "sessions.recent": "최근",
+  "sessions.unattributed": "미분류 요청",
+  "sessions.unattributedHint": "활성 요청 {count}개에 세션 ID가 없어 아직 그룹화할 수 없습니다.",
   "sessions.fallbacks": "대체 경로",
   "sessions.emptyActive": "활성 세션이 없습니다.",
   "sessions.emptyRecent": "최근 세션이 없습니다.",

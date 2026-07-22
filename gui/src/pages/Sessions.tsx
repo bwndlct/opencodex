@@ -206,6 +206,7 @@ export default function Sessions({ apiBase }: { apiBase: string }) {
   const { t, locale } = useI18n();
   const [active, setActive] = useState<ActiveSession[]>([]);
   const [recent, setRecent] = useState<RecentSession[]>([]);
+  const [unattributedActiveRequests, setUnattributedActiveRequests] = useState(0);
   const [policies, setPolicies] = useState<Record<string, PolicyState>>({});
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
@@ -250,6 +251,7 @@ export default function Sessions({ apiBase }: { apiBase: string }) {
       if (signal?.aborted) return;
       setActive(activeSnapshot.sessions);
       setRecent(recentSessions);
+      setUnattributedActiveRequests(activeSnapshot.unattributedActiveRequests);
       setLoadError(false);
       setNow(Date.now());
 
@@ -330,10 +332,16 @@ export default function Sessions({ apiBase }: { apiBase: string }) {
       </div>
 
       {loadError && <div className="sessions-load-error" role="status"><IconAlert />{t("sessions.loadError")}</div>}
+      {unattributedActiveRequests > 0 && (
+        <div className="sessions-load-error" role="status">
+          <IconAlert />{t("sessions.unattributedHint", { count: unattributedActiveRequests })}
+        </div>
+      )}
 
       <div className="sessions-summary" aria-label={t("sessions.summaryAria")}>
         <div><span>{t("sessions.active")}</span><strong>{active.length.toLocaleString(locale)}</strong></div>
         <div><span>{t("sessions.recent")}</span><strong>{recentIdle.length.toLocaleString(locale)}</strong></div>
+        <div className={unattributedActiveRequests > 0 ? "has-unattributed" : ""}><span>{t("sessions.unattributed")}</span><strong>{unattributedActiveRequests.toLocaleString(locale)}</strong></div>
         <div className={fallbackCount > 0 ? "has-fallback" : ""}><span>{t("sessions.fallbacks")}</span><strong>{fallbackCount.toLocaleString(locale)}</strong></div>
       </div>
 

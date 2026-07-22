@@ -2,7 +2,7 @@ const IDENTITY_VALUE_MAX_LENGTH = 256;
 const TURN_METADATA_MAX_LENGTH = 4096;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
 
-const SESSION_HEADER_CANDIDATES = [
+const LEGACY_SESSION_HEADER_CANDIDATES = [
   "x-codex-session-id",
   "x-codex-thread-id",
   "x-codex-conversation-id",
@@ -66,11 +66,16 @@ function hasExactSpawnedChildMarker(headerKind: string | null, turnMetadata: Tur
 }
 
 function executionSessionIdFromHeaders(headers: Headers): string | undefined {
-  for (const header of SESSION_HEADER_CANDIDATES) {
+  for (const header of LEGACY_SESSION_HEADER_CANDIDATES) {
     const value = sanitizeIdentityValue(headers.get(header));
     if (value) return value;
   }
   return undefined;
+}
+
+function clientMetadataValue(body: unknown, key: string): unknown {
+  const clientMetadata = bodyValue(body, "client_metadata");
+  return isRecord(clientMetadata) ? clientMetadata[key] : undefined;
 }
 
 function bodyValue(body: unknown, key: string): unknown {
@@ -91,10 +96,23 @@ export function isSpawnedChildRequest(headers: Headers): boolean {
 }
 
 export function requestIdentityFrom(headers: Headers, body: unknown): RequestIdentity {
-  const executionSessionId = executionSessionIdFromHeaders(headers);
+  // Current Codex keeps session-id stable across a root and its children, while
+  // thread-id identifies the actual issuing thread. client_metadata is the
+  // canonical duplicate when compatibility headers are unavailable.
+  const codexSessionId = sanitizeIdentityValue(headers.get("session-id"))
+    ?? sanitizeIdentityValue(clientMetadataValue(body, "session_id"));
+  const codexThreadId = sanitizeIdentityValue(headers.get("thread-id"))
+    ?? sanitizeIdentityValue(clientMetadataValue(body, "thread_id"));
+  const executionSessionId = codexThreadId
+    ?? executionSessionIdFromHeaders(headers)
+    ?? codexSessionId;
+  const headerParent = sanitizeIdentityValue(headers.get("x-codex-parent-thread-id"));
   const snakeParent = sanitizeIdentityValue(bodyValue(body, "parent_thread_id"));
-  const parentThreadId = snakeParent ?? sanitizeIdentityValue(bodyValue(body, "parentThreadId"));
-  const rootSessionId = parentThreadId ?? executionSessionId;
+  const camelParent = sanitizeIdentityValue(bodyValue(body, "parentThreadId"));
+  const metadataParent = sanitizeIdentityValue(clientMetadataValue(body, "x-codex-parent-thread-id"))
+    ?? sanitizeIdentityValue(clientMetadataValue(body, "parent_thread_id"));
+  const parentThreadId = headerParent ?? snakeParent ?? camelParent ?? metadataParent;
+  const rootSessionId = codexSessionId ?? parentThreadId ?? executionSessionId;
   const headerSubagentKind = sanitizeIdentityValue(headers.get("x-openai-subagent"));
   const turnMetadata = parseTurnMetadata(headers);
   const subagentKind = headerSubagentKind ?? turnMetadata.subagentKind;

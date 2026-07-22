@@ -969,6 +969,8 @@ export const zh: Record<TKey, string> = {
   "sessions.summaryAria": "Session 概览",
   "sessions.active": "活动中",
   "sessions.recent": "最近完成",
+  "sessions.unattributed": "未归属请求",
+  "sessions.unattributedHint": "有 {count} 个活动请求缺少 Session 身份，暂时无法归组。",
   "sessions.fallbacks": "回退",
   "sessions.emptyActive": "当前没有活动 Session。",
   "sessions.emptyRecent": "当前没有最近完成的 Session。",

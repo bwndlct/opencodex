@@ -972,6 +972,8 @@ export const en = {
   "sessions.summaryAria": "Session summary",
   "sessions.active": "Active",
   "sessions.recent": "Recent",
+  "sessions.unattributed": "Unattributed",
+  "sessions.unattributedHint": "{count} active requests are missing Session identity and cannot be grouped yet.",
   "sessions.fallbacks": "Fallbacks",
   "sessions.emptyActive": "No active Sessions.",
   "sessions.emptyRecent": "No recent Sessions.",

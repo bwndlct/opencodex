@@ -15,7 +15,7 @@
 
 .sessions-summary {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   border-block: 1px solid var(--border);
   margin: 18px 0 24px;
 }
@@ -33,6 +33,7 @@
 .sessions-summary span { color: var(--muted); font-size: var(--text-label); }
 .sessions-summary strong { font-family: var(--font-code); font-size: var(--text-subtitle); font-variant-numeric: tabular-nums; }
 .sessions-summary .has-fallback strong { color: var(--amber); }
+.sessions-summary .has-unattributed strong { color: var(--amber); }
 
 .sessions-section { margin-top: 24px; }
 .sessions-section + .sessions-section { margin-top: 32px; }

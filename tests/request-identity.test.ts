@@ -49,6 +49,40 @@ function unavailableConfig(): OcxConfig {
 }
 
 describe("request identity", () => {
+  test("uses current Codex session and thread headers with their official semantics", () => {
+    const identity = requestIdentityFrom(
+      new Headers({
+        "session-id": "root-session",
+        "thread-id": "child-thread",
+        "x-codex-parent-thread-id": "parent-thread",
+      }),
+      {},
+    );
+
+    expect(identity).toMatchObject({
+      executionSessionId: "child-thread",
+      parentThreadId: "parent-thread",
+      rootSessionId: "root-session",
+    });
+  });
+
+  test("uses fixed client_metadata identity fields when compatibility headers are absent", () => {
+    const identity = requestIdentityFrom(new Headers(), {
+      client_metadata: {
+        session_id: "root-session",
+        thread_id: "child-thread",
+        "x-codex-parent-thread-id": "parent-thread",
+        nested: { session_id: "ignored-nested-session" },
+      },
+    });
+
+    expect(identity).toMatchObject({
+      executionSessionId: "child-thread",
+      parentThreadId: "parent-thread",
+      rootSessionId: "root-session",
+    });
+  });
+
   test("supports the codex-proxy session headers in their exact priority order", () => {
     for (const [index, header] of SESSION_HEADERS.entries()) {
       const identity = requestIdentityFrom(new Headers({ [header]: ` session-${index} ` }), {});
@@ -90,7 +124,7 @@ describe("request identity", () => {
     });
   });
 
-  test("uses camelCase parent and top-level reasoning fallback without scanning nested data", () => {
+  test("uses camelCase parent and top-level reasoning fallback without recursively scanning data", () => {
     const identity = requestIdentityFrom(
       new Headers({ "x-codex-session-id": "main-session" }),
       {
@@ -98,9 +132,7 @@ describe("request identity", () => {
         reasoning_effort: "medium",
         session_id: "ignored-top-level-session",
         metadata: { session_id: "ignored-nested-session" },
-        client_metadata: {
-          "x-codex-turn-metadata": JSON.stringify({ request_kind: "ignored" }),
-        },
+        client_metadata: { nested: { session_id: "ignored-nested-session" } },
         input: [{ prompt: "session_id=ignored-content" }],
       },
     );

@@ -950,6 +950,8 @@ export const de = {
   "sessions.summaryAria": "Session-Übersicht",
   "sessions.active": "Aktiv",
   "sessions.recent": "Kürzlich",
+  "sessions.unattributed": "Nicht zugeordnet",
+  "sessions.unattributedHint": "{count} aktive Anfragen haben keine Session-Identität und können noch nicht gruppiert werden.",
   "sessions.fallbacks": "Fallbacks",
   "sessions.emptyActive": "Keine aktiven Sessions.",
   "sessions.emptyRecent": "Keine kürzlichen Sessions.",

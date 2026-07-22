@@ -1,7 +1,7 @@
 # Codex Proxy Capability Migration
 
 Status: source migration complete except OpenAI dual-upstream fallback; isolated
-Z.AI and company OpenAI canaries passed; formal deployment pending
+and formal provider canaries passed; OpenCodex is deployed on `127.0.0.1:8787`
 
 Baseline date: 2026-07-21
 
@@ -211,8 +211,8 @@ Status: completed against codex-proxy `main@9518cd1` and OpenCodex `main@908439b
 
 ### Phase 7: Company OpenAI Responses Compatibility
 
-Status: source implementation, fake-upstream tests, and isolated real
-company-upstream canary complete; formal deployment pending.
+Status: source implementation, fake-upstream tests, isolated real canary, and
+formal deployment complete.
 
 - Add `authMode: "passthrough"` for a non-ChatGPT `openai-responses` endpoint.
 - A non-`forward` `openai` provider preserves its configured base URL and bypasses
@@ -228,6 +228,10 @@ company-upstream canary complete; formal deployment pending.
   request through the configured company Responses endpoint and returned the exact
   expected output. The formal `127.0.0.1:8787` service was not modified by this
   canary.
+- The formal OpenCodex service on `127.0.0.1:8787` completed a real Codex CLI
+  request through the company endpoint without a command-line base-URL override.
+  The current Codex CLI first attempts WebSocket transport, receives `426`, and
+  successfully falls back to HTTP.
 - This phase restores the current company-first path. It does not yet reproduce the
   old router's automatic pre-first-output fallback from an exhausted personal account
   pool to the company upstream; that requires an explicit dual-upstream policy and
@@ -251,15 +255,16 @@ success.
 
 ## Deployment Track
 
-Formal deployment is not implied by source completion.
+Status: completed on 2026-07-22 from clean pushed commit `aae4493`.
 
-- Build from a clean pushed commit.
-- Run an isolated port canary first.
-- Verify source commit, installed artifact, process identity, health, and behavior as
-  separate gates.
-- Preserve rollback artifacts.
-- Modify the formal service or Codex configuration only with explicit deployment
-  authority.
+- The immutable release is `~/.opencodex-releases/2.7.28-aae4493`.
+- `com.opencodex.proxy` serves formal OpenCodex traffic on `127.0.0.1:8787`.
+- `com.user.codex-proxy` remains on `127.0.0.1:8790` for GLM Broker's authenticated
+  job-scoped Chat Completions route; Broker configuration was reloaded to that port.
+- Formal non-streaming GLM, streaming GLM, company OpenAI, service restart, health,
+  model-catalog, and Broker-route canaries passed.
+- The isolated OpenCodex service on `127.0.0.1:8789` and the deployment backup under
+  `~/.opencodex-deploy-backups/20260722-115143-aae4493` remain available for rollback.
 
 ## Batch Completion Contract
 

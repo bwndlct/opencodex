@@ -4,12 +4,14 @@ export type FallbackReason = "all_personal_accounts_unavailable";
 
 export interface ActiveSession {
   rootSessionId: string;
+  threadName?: string;
   activeRequests: number;
   executionSessionIds: string[];
   oldestStartedAt: number;
   routePolicy?: SessionRoutePolicy;
   requestedProvider?: string;
   requestedModel?: string;
+  requestedEffort?: string;
   effectiveProvider?: string;
   effectiveModel?: string;
   effectiveUpstream?: EffectiveUpstream;
@@ -25,10 +27,12 @@ export interface ActiveSessionSnapshot {
 
 export interface RecentSession {
   rootSessionId: string;
+  threadName?: string;
   lastSeenAt: number;
   executionSessionId?: string;
   requestedProvider?: string;
   requestedModel?: string;
+  requestedEffort?: string;
   effectiveProvider?: string;
   effectiveModel?: string;
 }
@@ -100,6 +104,7 @@ function parseActiveSession(value: unknown, index: number): ActiveSession {
 
   return {
     rootSessionId,
+    ...(sanitizeIdentityValue(value.threadName) ? { threadName: sanitizeIdentityValue(value.threadName) } : {}),
     activeRequests: requiredNonNegativeNumber(value, "activeRequests", scope),
     executionSessionIds: parseExecutionSessionIds(value.executionSessionIds, scope),
     oldestStartedAt: requiredNonNegativeNumber(value, "oldestStartedAt", scope),
@@ -109,6 +114,9 @@ function parseActiveSession(value: unknown, index: number): ActiveSession {
       : {}),
     ...(sanitizeIdentityValue(value.requestedModel)
       ? { requestedModel: sanitizeIdentityValue(value.requestedModel) }
+      : {}),
+    ...(sanitizeIdentityValue(value.requestedEffort)
+      ? { requestedEffort: sanitizeIdentityValue(value.requestedEffort) }
       : {}),
     ...(sanitizeIdentityValue(value.effectiveProvider)
       ? { effectiveProvider: sanitizeIdentityValue(value.effectiveProvider) }
@@ -177,6 +185,7 @@ function parseRecentSessionCandidate(value: unknown, sequence: number): RecentSe
       ? { executionSessionId: sanitizeIdentityValue(value.executionSessionId) }
       : {}),
     ...requestedModel,
+    ...(sanitizeIdentityValue(value.requestedEffort) ? { requestedEffort: sanitizeIdentityValue(value.requestedEffort) } : {}),
     ...(sanitizeIdentityValue(value.provider)
       ? { effectiveProvider: sanitizeIdentityValue(value.provider) }
       : {}),

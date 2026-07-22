@@ -1026,11 +1026,12 @@ export async function handleResponses(
   route.provider = applyCodexAuthContextToProvider(route.provider, authCtx, effectiveCodexAccountMode);
   logCtx.provider = formatCodexProviderForLog(route.providerName, codexLogAccountId(authCtx), config);
   const requestedProvider = explicitRequestedProvider(originalRequestedModelId);
-  options.onRequestRouteResolved?.({
-    routePolicy,
-    ...(requestedProvider ? { requestedProvider } : {}),
-    requestedModel: originalRequestedModelId,
-    effectiveProvider: route.providerName,
+ options.onRequestRouteResolved?.({
+   routePolicy,
+   ...(requestedProvider ? { requestedProvider } : {}),
+   requestedModel: originalRequestedModelId,
+   ...(logCtx.requestedEffort ? { requestedEffort: logCtx.requestedEffort } : {}),
+   effectiveProvider: route.providerName,
     effectiveModel: route.modelId,
     effectiveUpstream: effectiveCodexAccountMode === "pool"
       ? "codex_pool"

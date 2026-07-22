@@ -1,7 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
 import { invalidateCodexModelsCache, syncCatalogModels } from "./catalog";
-import { CODEX_MODELS_CACHE_PATH } from "./paths";
-import { atomicWriteFile } from "../config";
 import type { OcxConfig } from "../types";
 
 export interface CodexCatalogRefreshResult {
@@ -9,6 +7,7 @@ export interface CodexCatalogRefreshResult {
   path: string;
   catalogExists: boolean;
   cacheSynced: boolean;
+  cacheModels?: readonly Record<string, unknown>[];
 }
 
 interface RefreshDeps {
@@ -25,14 +24,14 @@ const defaultDeps: RefreshDeps = {
 
 export function syncCodexModelsCacheFromCatalog(catalogPath: string): void {
   const content = readFileSync(catalogPath, "utf8");
-  atomicWriteFile(CODEX_MODELS_CACHE_PATH, content);
+  const catalog = JSON.parse(content);
+  invalidateCodexModelsCache(catalog.models ?? catalog);
 }
 
 /**
- * Rebuild Codex's on-disk model catalog and force Codex's models cache stale
- * when a catalog file exists. The cache must keep Codex's fetched_at/client_version
- * wrapper shape; writing the raw catalog back here makes app-server/TUI refreshes
- * inconsistent with the CLI models-manager cache path.
+ * Rebuild Codex's on-disk model catalog and write the same client-version projection to the models
+ * cache. Recovery-only rows remain in the persistent catalog, but the cache now shares the exact
+ * model set and metadata emitted by `/v1/models?client_version`.
  */
 export async function refreshCodexModelCatalog(
   config: OcxConfig,
@@ -41,6 +40,6 @@ export async function refreshCodexModelCatalog(
   const result = await deps.syncCatalogModels(config);
   const catalogExists = deps.existsSync(result.path);
   if (!catalogExists) return { ...result, catalogExists, cacheSynced: false };
-  deps.invalidateCodexModelsCache();
+  deps.invalidateCodexModelsCache(result.cacheModels);
   return { ...result, catalogExists, cacheSynced: true };
 }

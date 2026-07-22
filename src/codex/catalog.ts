@@ -84,10 +84,10 @@ function isDefaultCatalogPath(path: string): boolean {
 }
 
 /**
- * Native OpenAI / Codex models served via ChatGPT OAuth passthrough — FALLBACK only. The ChatGPT
- * backend has no `GET /models`, so the real set is read from the live Codex catalog via
- * nativeOpenAiSlugs(); this static list is used when no catalog is present, plus selected documented
- * Codex-native additions that may lag in a user's installed Codex catalog.
+ * Native OpenAI / Codex models served via ChatGPT OAuth passthrough. The ChatGPT backend has no
+ * `GET /models`, so the supported set is read from the live Codex catalog when available and
+ * completed from this static list. Disabled native rows remain in the catalog as hidden entries so
+ * Codex can restore them when the user re-enables a model.
  */
 export const NATIVE_OPENAI_MODELS = [
   "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark",
@@ -298,8 +298,11 @@ export function catalogModelEfforts(slugs: readonly string[]): Map<string, strin
  * Single source for the /v1/models native list and the subagent-default seed.
  */
 export function nativeOpenAiSlugs(): string[] {
-  const live = listCatalogNativeSlugs();
-  return live.length > 0 ? unique([...live, ...DOCUMENTED_NATIVE_OPENAI_ADDITIONS]) : NATIVE_OPENAI_MODELS;
+  const cat = readCurrentCatalogOrCache();
+  const live = filterSupportedNativeSlugs(cat?.models ?? [], true);
+  // Keep every supported native row in the catalog-shaped projection. Disabled rows are hidden
+  // by applyNativeVisibility, but retaining them is required for restore/re-enable symmetry.
+  return unique([...live, ...NATIVE_OPENAI_MODELS, ...DOCUMENTED_NATIVE_OPENAI_ADDITIONS]);
 }
 
 export interface CatalogModel {
@@ -997,6 +1000,35 @@ export function buildCatalogEntries(
   return applyMultiAgentMode(out, multiAgentMode);
 }
 
+/**
+ * Build the exact Codex catalog projection shared by the client_version endpoint and the on-disk
+ * models cache. The persistent catalog may retain recovery-only rows, but this projection contains
+ * only the current native catalog shape plus currently selectable routed models.
+ */
+export function buildCodexCatalogEntries(
+  config: OcxConfig,
+  routedModels: CatalogModel[],
+  template: RawEntry | null = loadCatalogTemplate(),
+): RawEntry[] {
+  const visibleRouted = filterCatalogVisibleModels(routedModels, config);
+  const featured = config.subagentModels ?? [];
+  const orderedRouted = orderForSubagents(visibleRouted, featured);
+  const multiAgentMode: MultiAgentMode = config.multiAgentMode === "v1" || config.multiAgentMode === "v2"
+    ? config.multiAgentMode
+    : "default";
+  const exactComboSlugs = exactComboCatalogSlugs(config);
+  const entries = buildCatalogEntries(
+    template,
+    nativeOpenAiSlugs(),
+    orderedRouted,
+    featured,
+    websocketsEnabled(config),
+    multiAgentMode,
+    exactComboSlugs,
+  );
+  return applyNativeVisibility(entries, disabledNativeSlugs(config));
+}
+
 /** Bare picker-visible native slugs in the live Codex catalog (drives the subagent picker UI). */
 export function listCatalogNativeSlugs(): string[] {
   const cat = readCurrentCatalogOrCache();
@@ -1012,10 +1044,13 @@ export function listCatalogNativeSlugs(): string[] {
  * `codex-auto-review`, …); the allowlist drops them so `/v1/models` and the subagent picker
  * never advertise an unsupported native. Exported for regression coverage.
  */
-export function filterSupportedNativeSlugs(models: RawEntry[]): string[] {
+export function filterSupportedNativeSlugs(models: RawEntry[], includeHidden = false): string[] {
   return models
-    .filter(m => typeof m.slug === "string" && !(m.slug as string).includes("/") && m.visibility === "list" && SUPPORTED_NATIVE_OPENAI_SLUGS.has(m.slug as string))
-    .map(m => m.slug as string);
+    .filter(m => {
+      if (typeof m.slug !== "string" || m.slug.includes("/") || !SUPPORTED_NATIVE_OPENAI_SLUGS.has(m.slug)) return false;
+      return includeHidden || m.visibility === "list";
+    })
+    .flatMap(m => typeof m.slug === "string" ? [m.slug] : []);
 }
 
 /**
@@ -1860,7 +1895,11 @@ export function mergeCatalogEntriesForSync(
  *  - the catalog is backed up to ~/.opencodex/catalog-backup.json before writing.
  * No-op if the catalog file does not exist.
  */
-export async function syncCatalogModels(config: OcxConfig): Promise<{ added: number; path: string }> {
+export async function syncCatalogModels(config: OcxConfig): Promise<{
+  added: number;
+  path: string;
+  cacheModels?: RawEntry[];
+}> {
   const catalogPath = readCodexCatalogPath();
   const catalog = loadCatalogForSync(catalogPath);
   if (!catalog) return { added: 0, path: catalogPath };
@@ -1900,7 +1939,11 @@ export async function syncCatalogModels(config: OcxConfig): Promise<{ added: num
   catalog.models = mergeCatalogEntriesForSync(catalog.models ?? [], goEntries, baseline, featured, wsEnabled, goIds, template, disabledNativeSlugs(config), gatheredProviderNames, multiAgentMode, exactComboSlugs, hasPhysicalComboProvider);
 
   atomicWriteFile(catalogPath, JSON.stringify(catalog, null, 2) + "\n");
-  return { added: goEntries.length, path: catalogPath };
+  return {
+    added: goEntries.length,
+    path: catalogPath,
+    cacheModels: buildCodexCatalogEntries(config, goModels, template),
+  };
 }
 
 /**
@@ -1941,12 +1984,15 @@ export function restoreCodexCatalog(): { removed: number; kept: number; path: st
  * Codex caches the model list for 5 min (DEFAULT_MODEL_CACHE_TTL); copying the injected catalog
  * makes catalog edits (enable/disable, subagent reorder) apply on the next turn instead of waiting.
  */
-export function invalidateCodexModelsCache(): void {
+export function invalidateCodexModelsCache(modelsOverride?: readonly RawEntry[]): void {
   try {
-    const catalogPath = readCodexCatalogPath();
-    if (!existsSync(catalogPath)) return;
-    const catalog = JSON.parse(readFileSync(catalogPath, "utf8"));
-    const models = catalog.models ?? catalog;
+    let models: unknown = modelsOverride;
+    if (models === undefined) {
+      const catalogPath = readCodexCatalogPath();
+      if (!existsSync(catalogPath)) return;
+      const catalog = JSON.parse(readFileSync(catalogPath, "utf8"));
+      models = catalog.models ?? catalog;
+    }
     const wrapper = {
       fetched_at: "2000-01-01T00:00:00Z",
       client_version: "0.0.0",

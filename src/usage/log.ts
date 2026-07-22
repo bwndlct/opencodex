@@ -55,6 +55,9 @@ export interface PersistedUsageEntry {
   resolvedModel?: string;
   requestedModel?: string;
   requestedEffort?: string;
+  overrideSourceModel?: string;
+  overrideTargetModel?: string;
+  overrideEffort?: string;
   status: number;
   durationMs: number;
   /** TTFT relative to the request start (WP4); unset for non-streaming/tool-only. */
@@ -272,6 +275,8 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   const subagentKind = sanitizeIdentityValue(entry.subagentKind);
   const requestedModel = sanitizeIdentityValue(entry.requestedModel);
   const requestedEffort = sanitizeIdentityValue(entry.requestedEffort);
+  const overrideSourceModel = sanitizeIdentityValue(entry.overrideSourceModel);
+  const overrideTargetModel = sanitizeIdentityValue(entry.overrideTargetModel);
   return {
     requestId: entry.requestId,
     timestamp: entry.timestamp,
@@ -287,6 +292,9 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(entry.resolvedModel ? { resolvedModel: entry.resolvedModel } : {}),
     ...(requestedModel ? { requestedModel } : {}),
     ...(requestedEffort ? { requestedEffort } : {}),
+    ...(overrideSourceModel ? { overrideSourceModel } : {}),
+    ...(overrideTargetModel ? { overrideTargetModel } : {}),
+    ...(entry.overrideEffort ? { overrideEffort: entry.overrideEffort } : {}),
     status: entry.status,
     durationMs: entry.durationMs,
     ...(isNonNegativeFiniteNumber(entry.firstOutputMs)

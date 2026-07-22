@@ -44,8 +44,11 @@ describe("request log metadata", () => {
       requestKind: "agent_turn",
       subagentKind: "collab_spawn",
       isSpawnedChild: true,
-      requestedModel: "zai-anthropic/glm-5.2",
+      requestedModel: "gpt-5.4",
       requestedEffort: "high",
+      overrideSourceModel: "gpt-5.4",
+      overrideTargetModel: "zai-anthropic/glm-5.2",
+      overrideEffort: "max",
     }, 200, undefined, entry => captured.push(entry));
 
     expect(captured[0]).toMatchObject({
@@ -55,8 +58,11 @@ describe("request log metadata", () => {
       requestKind: "agent_turn",
       subagentKind: "collab_spawn",
       isSpawnedChild: true,
-      requestedModel: "zai-anthropic/glm-5.2",
+      requestedModel: "gpt-5.4",
       requestedEffort: "high",
+      overrideSourceModel: "gpt-5.4",
+      overrideTargetModel: "zai-anthropic/glm-5.2",
+      overrideEffort: "max",
     });
   });
 
@@ -193,6 +199,46 @@ describe("request log metadata", () => {
       attempts: [
         { provider: "a", status: 503 },
         { provider: "b", status: 200, usage: { inputTokens: 10, outputTokens: 2 } },
+      ],
+    });
+  });
+
+  test("override-to-combo logging aggregates attempts while preserving the source model", () => {
+    const entries: RequestLogEntry[] = [];
+    const first = finishRequestAttempt(
+      beginRequestAttempt(1, "first", "first-model", "openai-chat"),
+      503,
+      3,
+      { inputTokens: 4, outputTokens: 1 },
+    );
+    const second = finishRequestAttempt(
+      beginRequestAttempt(2, "second", "second-model", "openai-chat"),
+      200,
+      4,
+      { inputTokens: 6, outputTokens: 2 },
+    );
+    addFinalRequestLog("override-combo", Date.now(), {
+      model: "combo/glm-failover",
+      provider: "combo",
+      requestedModel: "gpt-5.4",
+      overrideSourceModel: "gpt-5.4",
+      overrideTargetModel: "combo/glm-failover",
+      overrideEffort: "max",
+      attempts: [first, second],
+    }, 200, undefined, entry => entries.push(entry));
+
+    expect(entries[0]).toMatchObject({
+      model: "combo/glm-failover",
+      provider: "combo",
+      requestedModel: "gpt-5.4",
+      overrideSourceModel: "gpt-5.4",
+      overrideTargetModel: "combo/glm-failover",
+      overrideEffort: "max",
+      usage: { inputTokens: 10, outputTokens: 3, totalTokens: 13 },
+      totalTokens: 13,
+      attempts: [
+        { provider: "first", status: 503 },
+        { provider: "second", status: 200 },
       ],
     });
   });

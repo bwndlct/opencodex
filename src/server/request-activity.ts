@@ -28,6 +28,9 @@ export interface RequestRouteObservation {
   effectiveModel?: string;
   effectiveUpstream: RequestEffectiveUpstream;
   fallbackReason?: RequestFallbackReason;
+  overrideSourceModel?: string;
+  overrideTargetModel?: string;
+  overrideEffort?: string;
 }
 
 export interface RequestActivitySession {
@@ -44,6 +47,9 @@ export interface RequestActivitySession {
   effectiveModel?: string;
   effectiveUpstream?: RequestEffectiveUpstream;
   fallbackReason?: RequestFallbackReason;
+  overrideSourceModel?: string;
+  overrideTargetModel?: string;
+  overrideEffort?: string;
 }
 
 export interface RequestActivitySnapshot {
@@ -101,6 +107,9 @@ function sanitizeRouteObservation(value: unknown): RequestRouteObservation | und
   const fallbackReason = isRequestFallbackReason(value.fallbackReason)
     ? value.fallbackReason
     : undefined;
+  const overrideSourceModel = sanitizeIdentityValue(value.overrideSourceModel);
+  const overrideTargetModel = sanitizeIdentityValue(value.overrideTargetModel);
+  const overrideEffort = sanitizeIdentityValue(value.overrideEffort);
 
   return {
     routePolicy: value.routePolicy,
@@ -111,6 +120,9 @@ function sanitizeRouteObservation(value: unknown): RequestRouteObservation | und
     ...(effectiveModel ? { effectiveModel } : {}),
     effectiveUpstream: value.effectiveUpstream,
     ...(fallbackReason ? { fallbackReason } : {}),
+    ...(overrideSourceModel ? { overrideSourceModel } : {}),
+    ...(overrideTargetModel ? { overrideTargetModel } : {}),
+    ...(overrideEffort ? { overrideEffort } : {}),
   };
 }
 

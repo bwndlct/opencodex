@@ -144,6 +144,9 @@ describe("request activity store", () => {
       effectiveProvider: "effective-provider",
       effectiveModel: "effective-model",
       effectiveUpstream: "codex_pool",
+      overrideSourceModel: "gpt-5.4",
+      overrideTargetModel: "combo/glm-failover",
+      overrideEffort: "max",
     });
 
     expect(snapshotRequestActivity(2).sessions).toEqual([{
@@ -158,6 +161,9 @@ describe("request activity store", () => {
       effectiveProvider: "effective-provider",
       effectiveModel: "effective-model",
       effectiveUpstream: "codex_pool",
+      overrideSourceModel: "gpt-5.4",
+      overrideTargetModel: "combo/glm-failover",
+      overrideEffort: "max",
     }]);
   });
 

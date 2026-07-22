@@ -71,8 +71,11 @@ describe("usage log", () => {
       requestKind: "agent_turn",
       subagentKind: "collab_spawn",
       isSpawnedChild: true,
-      requestedModel: "zai-anthropic/glm-5.2",
+      requestedModel: "gpt-5.4",
       requestedEffort: "high",
+      overrideSourceModel: "gpt-5.4",
+      overrideTargetModel: "zai-anthropic/glm-5.2",
+      overrideEffort: "max",
       status: 200,
       durationMs: 20,
       usageStatus: "reported",
@@ -86,8 +89,11 @@ describe("usage log", () => {
       requestKind: "agent_turn",
       subagentKind: "collab_spawn",
       isSpawnedChild: true,
-      requestedModel: "zai-anthropic/glm-5.2",
+      requestedModel: "gpt-5.4",
       requestedEffort: "high",
+      overrideSourceModel: "gpt-5.4",
+      overrideTargetModel: "zai-anthropic/glm-5.2",
+      overrideEffort: "max",
     });
   });
 

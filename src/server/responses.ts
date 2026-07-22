@@ -9,6 +9,8 @@ import { buildCompactV1Output, COMPACT_PROMPT, decodeCompactionSummary, extractC
 import { copyPassthroughHeaders, FORWARD_HEADERS } from "../adapters/openai-responses";
 import { expandPreviousResponseInput, previousResponseConversationId, rememberResponseState } from "../responses/state";
 import { routeModel } from "../router";
+import { resolveModelRouteOverride, isFixedEffort } from "../model-route-overrides";
+import type { ModelRouteOverrideResult } from "../model-route-overrides";
 import {
   advanceComboAfterFailure,
   comboDefaultEffort,
@@ -507,6 +509,8 @@ interface HandleResponsesOptions {
   onRequestRouteResolved?: (observation: RequestRouteObservation) => void;
   /** Internal identity handoff for routed compact and combo recursion. */
   identityOverride?: RequestIdentity;
+  /** Internal route override handoff; prevents re-applying a source rule to a child request. */
+  routeOverride?: ModelRouteOverrideResult;
   /** One-shot TTFT callback: first non-empty model output observed (WP4). */
   onFirstOutput?: () => void;
   onCodexAuthContextResolved?: (context: CodexAuthContext | undefined) => void;
@@ -612,6 +616,23 @@ function createChildPassthroughCallbackGate(options: HandleResponsesOptions) {
   };
 }
 
+function applyModelRouteOverrideToRawBody(
+  body: unknown,
+  override: ModelRouteOverrideResult,
+): unknown {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return body;
+  const clone = structuredClone(body) as Record<string, unknown>;
+  clone.model = override.targetModel;
+  if (!isFixedEffort(override.effort)) return clone;
+  const reasoning = clone.reasoning;
+  if (reasoning && typeof reasoning === "object" && !Array.isArray(reasoning)) {
+    clone.reasoning = { ...(reasoning as Record<string, unknown>), effort: override.effort };
+  } else {
+    clone.reasoning = { effort: override.effort };
+  }
+  return clone;
+}
+
 async function handleComboResponses(
   req: Request,
   rawBody: unknown,
@@ -620,10 +641,17 @@ async function handleComboResponses(
   logCtx: RequestLogContext,
   options: HandleResponsesOptions,
 ): Promise<Response> {
+  const routeOverride = options.routeOverride;
+  const logicalRequestedModel = routeOverride?.sourceModel ?? `combo/${comboId}`;
   Object.assign(logCtx, {
-    requestedModel: `combo/${comboId}`,
+    requestedModel: logicalRequestedModel,
     model: `combo/${comboId}`,
     provider: "combo",
+    ...(routeOverride ? {
+      overrideSourceModel: routeOverride.sourceModel,
+      overrideTargetModel: routeOverride.targetModel,
+      overrideEffort: routeOverride.effort,
+    } : {}),
   });
   const combo = getCombo(config, comboId);
   if (!combo) {
@@ -686,6 +714,7 @@ async function handleComboResponses(
       response = await handleResponses(childRequest, config, childLog, {
         ...options,
         comboAttempt: true,
+        routeOverride,
         // Attempt-relative TTFT is recorded HERE (not via childLog.firstOutputMs — a later
         // Object.assign(logCtx, childLog) would overwrite the request-relative value).
         onFirstOutput: () => {
@@ -725,9 +754,14 @@ async function handleComboResponses(
       attemptRetained = true;
       noteComboSuccess(comboId, combo, pick.target);
       Object.assign(logCtx, childLog, {
-        requestedModel: `combo/${comboId}`,
+        requestedModel: logicalRequestedModel,
         model: `combo/${comboId}`,
         provider: "combo",
+        ...(routeOverride ? {
+          overrideSourceModel: routeOverride.sourceModel,
+          overrideTargetModel: routeOverride.targetModel,
+          overrideEffort: routeOverride.effort,
+        } : {}),
         attempts: logCtx.attempts,
         activeAttempt: attempt,
         activeAttemptStartedAt: started,
@@ -775,9 +809,14 @@ async function handleComboResponses(
     lastFailure = failure.response;
     if (comboFailureDecision(response.status, failure.classificationText) === "stop") {
       Object.assign(logCtx, childLog, {
-        requestedModel: `combo/${comboId}`,
+        requestedModel: logicalRequestedModel,
         model: `combo/${comboId}`,
         provider: "combo",
+        ...(routeOverride ? {
+          overrideSourceModel: routeOverride.sourceModel,
+          overrideTargetModel: routeOverride.targetModel,
+          overrideEffort: routeOverride.effort,
+        } : {}),
         attempts: logCtx.attempts,
         activeAttempt: undefined,
         activeAttemptStartedAt: undefined,
@@ -810,11 +849,25 @@ export async function handleResponses(
   const identity = options.identityOverride ?? requestIdentityFrom(req.headers, body);
   Object.assign(logCtx, identity);
   options.onRequestIdentityResolved?.(identity);
+  const rawModel = body && typeof body === "object" && !Array.isArray(body)
+    ? (body as { model?: unknown }).model
+    : undefined;
+  const routeOverride = options.routeOverride
+    ?? (typeof rawModel === "string" ? resolveModelRouteOverride(config, rawModel) : null);
+  if (!options.comboAttempt && routeOverride?.targetModel.startsWith("combo/")) {
+    body = applyModelRouteOverrideToRawBody(body, routeOverride);
+    Object.assign(logCtx, {
+      overrideSourceModel: routeOverride.sourceModel,
+      overrideTargetModel: routeOverride.targetModel,
+      overrideEffort: routeOverride.effort,
+    });
+  }
   const comboId = !options.comboAttempt ? comboIdFromRawBody(body) : null;
   if (comboId && Object.hasOwn(config.combos ?? {}, comboId)) {
     return handleComboResponses(req, body, comboId, config, logCtx, {
       ...options,
       identityOverride: identity,
+      routeOverride: routeOverride ?? undefined,
     });
   }
   const originalBody = body;
@@ -845,12 +898,46 @@ export async function handleResponses(
     return formatErrorResponse(400, "invalid_request_error", err instanceof Error ? err.message : String(err));
   }
   const originalRequestedModelId = parsed.modelId;
-  logCtx.requestedModel = parsed.modelId;
+  const clientRequestedModelId = routeOverride?.sourceModel ?? originalRequestedModelId;
+  // requestedModel/requestedEffort always preserve the CLIENT's original values.
+  logCtx.requestedModel = clientRequestedModelId;
   logCtx.requestedEffort = parsed.options.reasoning;
   logCtx.requestedServiceTier = parsed.options.serviceTier;
   logCtx.requestedSpeedLabel = requestLogSpeedLabel(parsed.options.serviceTier);
   logCtx.configuredServiceTier = readConfiguredCodexServiceTier();
   logCtx.configuredSpeedLabel = requestLogSpeedLabel(logCtx.configuredServiceTier);
+
+  // Model route override: redirect a native OpenAI model (e.g. gpt-5.4) to a different
+  // provider/model or combo. Fires BEFORE shadowCallIntercept and routeModel so the
+  // override target flows through the normal routing path. Source keys are exact-match
+  // bare native ids; direct requests for the target model bypass overrides entirely
+  // (namespaced/combo ids never match a source key). Guard: no chained override — the
+  // resolved target is NOT re-checked against the override map (prevents loops).
+  {
+    const override = routeOverride ?? resolveModelRouteOverride(config, parsed.modelId);
+    if (override) {
+      if (!options.routeOverride) {
+        parsed.modelId = override.targetModel;
+        if (parsed._rawBody && typeof parsed._rawBody === "object") {
+          (parsed._rawBody as { model?: string }).model = override.targetModel;
+        }
+        // Apply fixed effort (dual-write parsed + raw body); "inherit" keeps the client value.
+        if (isFixedEffort(override.effort)) {
+          parsed.options.reasoning = override.effort;
+          const raw = parsed._rawBody as { reasoning?: { effort?: string } } | undefined;
+          if (raw?.reasoning && typeof raw.reasoning === "object") {
+            raw.reasoning.effort = override.effort;
+          } else if (parsed._rawBody && typeof parsed._rawBody === "object") {
+            (parsed._rawBody as { reasoning?: unknown }).reasoning = { effort: override.effort };
+          }
+        }
+      }
+      logCtx.overrideSourceModel = override.sourceModel;
+      logCtx.overrideTargetModel = override.targetModel;
+      logCtx.overrideEffort = override.effort;
+      logCtx.requestedModel = override.sourceModel;
+    }
+  }
 
   // Shadow call intercept: rewrite Codex Desktop's hard-coded gpt-5.4-mini helper calls
   const _sci = config.shadowCallIntercept;
@@ -1025,13 +1112,13 @@ export async function handleResponses(
   }
   route.provider = applyCodexAuthContextToProvider(route.provider, authCtx, effectiveCodexAccountMode);
   logCtx.provider = formatCodexProviderForLog(route.providerName, codexLogAccountId(authCtx), config);
-  const requestedProvider = explicitRequestedProvider(originalRequestedModelId);
- options.onRequestRouteResolved?.({
-   routePolicy,
-   ...(requestedProvider ? { requestedProvider } : {}),
-   requestedModel: originalRequestedModelId,
-   ...(logCtx.requestedEffort ? { requestedEffort: logCtx.requestedEffort } : {}),
-   effectiveProvider: route.providerName,
+  const requestedProvider = explicitRequestedProvider(clientRequestedModelId);
+  options.onRequestRouteResolved?.({
+    routePolicy,
+    ...(requestedProvider ? { requestedProvider } : {}),
+    requestedModel: clientRequestedModelId,
+    ...(logCtx.requestedEffort ? { requestedEffort: logCtx.requestedEffort } : {}),
+    effectiveProvider: route.providerName,
     effectiveModel: route.modelId,
     effectiveUpstream: effectiveCodexAccountMode === "pool"
       ? "codex_pool"
@@ -1039,6 +1126,9 @@ export async function handleResponses(
         ? "codex_direct"
         : "provider",
     ...(usedConfiguredFallback ? { fallbackReason: "all_personal_accounts_unavailable" } : {}),
+    ...(logCtx.overrideSourceModel ? { overrideSourceModel: logCtx.overrideSourceModel } : {}),
+    ...(logCtx.overrideTargetModel ? { overrideTargetModel: logCtx.overrideTargetModel } : {}),
+    ...(logCtx.overrideEffort ? { overrideEffort: logCtx.overrideEffort } : {}),
   });
 
   // OAuth providers: swap in a fresh access token (auto-refreshed) as the Bearer key, so the
@@ -1739,6 +1829,59 @@ export async function bufferCompactResponse(upstream: Response, signal: AbortSig
   return new Response(body, { status: upstream.status, headers: { "Content-Type": contentType } });
 }
 
+async function runRoutedCompactRequest(
+  req: Request,
+  config: OcxConfig,
+  logCtx: RequestLogContext,
+  raw: Record<string, unknown>,
+  inputItems: unknown[],
+  identity: RequestIdentity,
+  routeOverride?: ModelRouteOverrideResult,
+): Promise<Response> {
+  // Routed compact uses the same synthetic turn as the v2 compaction path. Keeping this in a
+  // helper lets combo targets enter handleComboResponses directly, without a speculative
+  // routeModel/pickComboTarget call that would advance selection twice.
+  const internalBody: Record<string, unknown> = {
+    ...raw,
+    stream: false,
+    input: [...inputItems, { type: "compaction_trigger" }],
+  };
+  if (routeOverride && isFixedEffort(routeOverride.effort)) {
+    internalBody.reasoning = { effort: routeOverride.effort };
+  }
+  const internalHeaders = new Headers({ "content-type": "application/json" });
+  for (const name of FORWARD_HEADERS) {
+    const value = req.headers.get(name);
+    if (value) internalHeaders.set(name, value);
+  }
+  const internalReq = new Request("http://localhost/v1/responses", {
+    method: "POST",
+    headers: internalHeaders,
+    body: JSON.stringify(internalBody),
+  });
+  const response = await handleResponses(internalReq, config, logCtx, {
+    abortSignal: req.signal,
+    identityOverride: identity,
+    ...(routeOverride ? { routeOverride } : {}),
+  });
+  if (!response.ok) return response;
+  let json: { output?: unknown[] };
+  try {
+    json = await response.json() as { output?: unknown[] };
+  } catch {
+    return formatErrorResponse(502, "server_error", "compaction turn returned a non-JSON response");
+  }
+  const compactionItem = (json.output ?? []).find(
+    (item): item is { type: string; encrypted_content?: string } =>
+      !!item && typeof item === "object" && (item as { type?: string }).type === "compaction",
+  );
+  const summary = compactionItem?.encrypted_content
+    ? decodeCompactionSummary(compactionItem.encrypted_content) ?? ""
+    : "";
+  const output = buildCompactV1Output(extractCompactUserMessages(inputItems), summary);
+  return new Response(JSON.stringify({ output }), { headers: { "Content-Type": "application/json" } });
+}
+
 export async function handleResponsesCompact(
   req: Request,
   config: OcxConfig,
@@ -1755,19 +1898,49 @@ export async function handleResponsesCompact(
   }
   const identity = requestIdentityFrom(req.headers, body);
   Object.assign(logCtx, identity);
-  const raw = body as { model?: unknown; input?: unknown };
+  const raw = body as Record<string, unknown> & { model?: unknown; input?: unknown };
   if (typeof raw.model !== "string" || raw.model.length === 0) {
     return formatErrorResponse(400, "invalid_request_error", "compaction request requires a model");
   }
 
+  // Model route override: apply the same source→target redirect as /v1/responses, BEFORE
+  // routeModel. requestedModel preserves the original client value; effective routing uses
+  // the override target. Routed compact applies fixed effort; native compact passthrough
+  // keeps existing API semantics (the passthrough branch strips reasoning deliberately).
+  const compactRequestedModel: string = raw.model;
+  const compactOverride = resolveModelRouteOverride(config, compactRequestedModel);
+  const compactEffectiveModel: string = compactOverride ? compactOverride.targetModel : compactRequestedModel;
+  if (compactOverride) {
+    raw.model = compactOverride.targetModel;
+    logCtx.overrideSourceModel = compactOverride.sourceModel;
+    logCtx.overrideTargetModel = compactOverride.targetModel;
+    logCtx.overrideEffort = compactOverride.effort;
+  }
+
+  const compactComboId = comboIdFromRawBody(raw);
+  if (compactComboId && Object.hasOwn(config.combos ?? {}, compactComboId)) {
+    logCtx.requestedModel = compactOverride?.sourceModel ?? compactRequestedModel;
+    logCtx.model = `combo/${compactComboId}`;
+    logCtx.provider = "combo";
+    return runRoutedCompactRequest(
+      req,
+      config,
+      logCtx,
+      raw,
+      Array.isArray(raw.input) ? raw.input : [],
+      identity,
+      compactOverride ?? undefined,
+    );
+  }
+
   let route;
   try {
-    route = routeModel(config, raw.model);
+    route = routeModel(config, compactEffectiveModel);
   } catch (err) {
     return formatErrorResponse(404, "invalid_request_error", err instanceof Error ? err.message : String(err));
   }
   const selectedModelId = route.modelId;
-  logCtx.requestedModel = raw.model;
+  logCtx.requestedModel = compactOverride?.sourceModel ?? compactRequestedModel;
   logCtx.model = selectedModelId;
   logCtx.provider = route.providerName;
   logCtx.providerAdapter = route.provider.adapter;
@@ -1856,42 +2029,15 @@ export async function handleResponsesCompact(
 
   // ROUTED model: run the v2 synthetic-compaction turn internally (appends COMPACT_PROMPT, no
   // tools) and decode the resulting ocx1 envelope into plain v1 replacement-history items.
-  const inputItems = Array.isArray(raw.input) ? (raw.input as unknown[]) : [];
-  const internalBody = {
-    ...raw,
-    stream: false,
-    input: [...inputItems, { type: "compaction_trigger" }],
-  };
-  const internalHeaders = new Headers({ "content-type": "application/json" });
-  for (const name of FORWARD_HEADERS) {
-    const value = req.headers.get(name);
-    if (value) internalHeaders.set(name, value);
-  }
-  const internalReq = new Request("http://localhost/v1/responses", {
-    method: "POST",
-    headers: internalHeaders,
-    body: JSON.stringify(internalBody),
-  });
-  const response = await handleResponses(internalReq, config, logCtx, {
-    abortSignal: req.signal,
-    identityOverride: identity,
-  });
-  if (!response.ok) return response;
-  let json: { output?: unknown[] };
-  try {
-    json = await response.json() as { output?: unknown[] };
-  } catch {
-    return formatErrorResponse(502, "server_error", "compaction turn returned a non-JSON response");
-  }
-  const compactionItem = (json.output ?? []).find(
-    (item): item is { type: string; encrypted_content?: string } =>
-      !!item && typeof item === "object" && (item as { type?: string }).type === "compaction",
+  return runRoutedCompactRequest(
+    req,
+    config,
+    logCtx,
+    raw,
+    Array.isArray(raw.input) ? raw.input : [],
+    identity,
+    compactOverride ?? undefined,
   );
-  const summary = compactionItem?.encrypted_content
-    ? decodeCompactionSummary(compactionItem.encrypted_content) ?? ""
-    : "";
-  const output = buildCompactV1Output(extractCompactUserMessages(inputItems), summary);
-  return new Response(JSON.stringify({ output }), { headers: { "Content-Type": "application/json" } });
 }
 
 export function disableResponsesRequestTimeout(req: Request, server: Pick<Server<WsData>, "timeout"> | undefined): boolean {

@@ -10,6 +10,8 @@ import { dirname, join } from "node:path";
 import { readFileSync } from "node:fs";
 import { buildCatalogEntries, mergeCatalogEntriesForSync, nativeEffortClamp, type MultiAgentMode } from "../src/codex/catalog";
 import {
+  DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION,
+  ensureDefaultMultiAgentV2Threads,
   getAgentsMaxThreads,
   getLogicalMaxThreads,
   getMaxConcurrentThreads,
@@ -124,8 +126,28 @@ describe("max_concurrent_threads_per_session reader/writer", () => {
 
   test("reader: present, absent key, absent table", () => {
     expect(getMaxConcurrentThreads(fixtureConfig(TABLE))).toBe(1000);
-    expect(getMaxConcurrentThreads(fixtureConfig("[features.multi_agent_v2]\nenabled = true\n"))).toBe(null);
+    const enabledWithoutLimit = fixtureConfig("[features.multi_agent_v2]\nenabled = true\n");
+    expect(getMaxConcurrentThreads(enabledWithoutLimit)).toBe(null);
+    expect(getLogicalMaxThreads(enabledWithoutLimit)).toBe(DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION);
     expect(getMaxConcurrentThreads(fixtureConfig("[features]\nmulti_agent_v2 = true\n"))).toBe(null);
+  });
+
+  test("OpenCodex seeds v2 concurrency at 16 without overriding explicit limits", () => {
+    const unset = fixtureConfig("[features.multi_agent_v2]\nenabled = true\n");
+    expect(ensureDefaultMultiAgentV2Threads(unset)).toEqual({ ok: true, changed: true });
+    expect(getMaxConcurrentThreads(unset)).toBe(DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION);
+
+    const explicit = fixtureConfig("[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 32\n");
+    expect(ensureDefaultMultiAgentV2Threads(explicit)).toEqual({ ok: true, changed: false });
+    expect(getMaxConcurrentThreads(explicit)).toBe(32);
+
+    const disabled = fixtureConfig("[features.multi_agent_v2]\nenabled = false\n");
+    expect(ensureDefaultMultiAgentV2Threads(disabled)).toEqual({ ok: true, changed: false });
+    expect(getMaxConcurrentThreads(disabled)).toBe(null);
+
+    const legacy = fixtureConfig("[features.multi_agent_v2]\nenabled = true\n\n[agents]\nmax_threads = 24\n");
+    expect(ensureDefaultMultiAgentV2Threads(legacy)).toEqual({ ok: true, changed: false });
+    expect(getAgentsMaxThreads(legacy)).toBe(24);
   });
 
   test("writer replaces in place, preserving comments and neighbors", () => {
@@ -274,12 +296,14 @@ describe("thread-limit-preserving v1/v2 transition", () => {
     expect(getLogicalMaxThreads(path)).toBe(256);
   });
 
-  test("unset limits stay unset in both directions", () => {
+  test("enabling v2 seeds the OpenCodex default and preserves it when disabling", () => {
     const path = fixtureConfig("[features.multi_agent_v2]\nenabled = false\n");
     expect(transitionMultiAgentV2(true, flipTableFlag(path), { configPath: path }).ok).toBe(true);
-    expect(getLogicalMaxThreads(path)).toBe(null);
+    expect(getLogicalMaxThreads(path)).toBe(DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION);
+    expect(getMaxConcurrentThreads(path)).toBe(DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION);
     expect(transitionMultiAgentV2(false, flipTableFlag(path), { configPath: path }).ok).toBe(true);
-    expect(getLogicalMaxThreads(path)).toBe(null);
+    expect(getLogicalMaxThreads(path)).toBe(DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION);
+    expect(getAgentsMaxThreads(path)).toBe(DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION);
   });
 
   test("throwing and ineffective feature commands restore the original bytes", () => {

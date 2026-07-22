@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import * as z from "zod/v4";
 import { comboConfigIssues } from "./combos/types";
+import { modelRouteOverrideIssues } from "./model-route-overrides";
 import { hardenSecretDir, hardenSecretPath } from "./lib/windows-secret-acl";
 import { providerDestinationConfigError } from "./lib/destination-policy";
 import { isCanonicalOpenAiForwardProvider } from "./providers/openai-tiers";
@@ -500,6 +501,14 @@ const configSchema = z.object({
         }
       }
     }
+  }
+
+  for (const issue of modelRouteOverrideIssues(config)) {
+    ctx.addIssue({
+      code: "custom",
+      path: issue.path,
+      message: issue.message,
+    });
   }
 });
 

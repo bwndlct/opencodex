@@ -47,6 +47,14 @@ import {
   type DebugFlag,
 } from "../lib/debug-settings";
 import type { OcxClaudeCodeConfig, OcxConfig, OcxProviderConfig } from "../types";
+import {
+  modelRouteOverrideError,
+  normalizeModelRouteOverrides,
+  overridesDependingOnCombo,
+  overridesDependingOnProvider,
+  isOverrideEffort,
+  isStringRecord,
+} from "../model-route-overrides";
 import { drainAndShutdown, snapshotDrainState } from "./lifecycle";
 import { IncidentHistory, DEFAULT_INCIDENT_LIMIT, MAX_INCIDENT_LIMIT } from "./incidents";
 import { buildHealthReport } from "./health";
@@ -1063,6 +1071,13 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
         combos: dependentCombos,
       }, 409);
     }
+    const dependentOverrides = overridesDependingOnProvider(config, name);
+    if (dependentOverrides.length > 0) {
+      return jsonResponse({
+        error: `cannot delete provider "${name}" while model route overrides depend on it`,
+        overrides: dependentOverrides,
+      }, 409);
+    }
     const { saveConfig: save } = await import("../config");
     delete config.providers[name];
     setProviderContextCap(config, name, false);
@@ -1883,6 +1898,13 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
       return jsonResponse({ error: "unknown combo" }, 404);
     }
     const { clearComboSelectionState, clearComboTargetCooldowns } = await import("../combos");
+    const dependentOverrides = overridesDependingOnCombo(config, id);
+    if (dependentOverrides.length > 0) {
+      return jsonResponse({
+        error: `cannot delete combo "${id}" while model route overrides depend on it`,
+        overrides: dependentOverrides,
+      }, 409);
+    }
     delete config.combos![id];
     if (Object.keys(config.combos!).length === 0) delete config.combos;
     saveConfig(config);
@@ -1890,6 +1912,62 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     clearComboTargetCooldowns(id);
     await refreshCodexCatalogBestEffort();
     return jsonResponse({ success: true, id });
+  }
+
+  if (url.pathname === "/api/model-route-overrides" && req.method === "GET") {
+    return jsonResponse(config.modelRouteOverrides ?? { enabled: false, rules: {} });
+  }
+
+  if (url.pathname === "/api/model-route-overrides" && req.method === "PUT") {
+    let rawBody: unknown;
+    try { rawBody = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    if (!isPlainRecord(rawBody)) {
+      return jsonResponse({ error: "request body must be an object" }, 400);
+    }
+    const body: Record<string, unknown> = rawBody;
+    if (body.enabled !== undefined && typeof body.enabled !== "boolean") {
+      return jsonResponse({ error: "enabled must be a boolean" }, 400);
+    }
+    if (!body.rules || typeof body.rules !== "object" || Array.isArray(body.rules)) {
+      return jsonResponse({ error: "rules must be an object" }, 400);
+    }
+    // STRICT raw-shape validation BEFORE normalize: any malformed rule returns 400.
+    // normalizeModelRouteOverrides silently drops invalid entries, so we validate
+    // the raw input here to surface errors instead of silently losing data.
+    const rawRules: Record<string, unknown> = isStringRecord(body.rules) ? body.rules : {};
+    for (const [source, ruleRaw] of Object.entries(rawRules)) {
+      if (!ruleRaw || typeof ruleRaw !== "object" || Array.isArray(ruleRaw)) {
+        return jsonResponse({ error: `override rule for "${source}" must be an object` }, 400);
+      }
+      if (!isStringRecord(ruleRaw)) {
+        return jsonResponse({ error: `override rule for "${source}" must be an object` }, 400);
+      }
+      const rule = ruleRaw;
+      if (typeof rule.target !== "string" || rule.target.trim() === "") {
+        return jsonResponse({ error: `target for "${source}" is required and must be a non-empty string` }, 400);
+      }
+      if (rule.enabled !== undefined && typeof rule.enabled !== "boolean") {
+        return jsonResponse({ error: `enabled for "${source}" must be a boolean` }, 400);
+      }
+      if (rule.effort !== undefined && (typeof rule.effort !== "string" || !isOverrideEffort(rule.effort))) {
+        return jsonResponse({ error: `effort for "${source}" must be one of: inherit, low, medium, high, xhigh, max, ultra` }, 400);
+      }
+    }
+    const overridesInput = {
+      ...(typeof body.enabled === "boolean" ? { enabled: body.enabled } : {}),
+      rules: rawRules,
+    };
+    const normalized = normalizeModelRouteOverrides(overridesInput);
+    // Atomic semantic validation: save the old value, set the new one, validate, and revert on failure.
+    const previous = config.modelRouteOverrides;
+    config.modelRouteOverrides = normalized;
+    const error = modelRouteOverrideError(config);
+    if (error) {
+      config.modelRouteOverrides = previous;
+      return jsonResponse({ error }, 400);
+    }
+    saveConfig(config);
+    return jsonResponse({ success: true, modelRouteOverrides: normalized });
   }
 
   if (url.pathname === "/api/drain" && req.method === "GET") {

@@ -495,6 +495,12 @@ export interface OcxConfig {
   };
   /** Virtual `combo/<id>` models spanning concrete provider/model targets (issue #133). */
   combos?: Record<string, OcxComboConfig>;
+  /**
+   * Native model route overrides: redirect a native OpenAI model id (e.g. "gpt-5.4") to a
+   * different provider/model or combo. Disabled by default; opt-in via `enabled: true`.
+   * Direct requests for the target model are NOT intercepted (one-directional redirect).
+   */
+  modelRouteOverrides?: OcxModelRouteOverrides;
   /** Background proactive token refresh ("Token Guardian"). Off by default; see OcxTokenGuardianConfig. */
   tokenGuardian?: OcxTokenGuardianConfig;
   /** Additional origins allowed for CORS (e.g. ["https://clisu-oracle.tail19a2d7.ts.net"]). Loopback origins are always allowed. */
@@ -519,6 +525,24 @@ export interface OcxComboConfig {
   stickyLimit?: number;
   /** Used when the client omits reasoning.effort. Default medium. */
   defaultEffort?: OcxComboDefaultEffort;
+}
+
+export type OcxModelRouteOverrideEffort = "inherit" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+
+export interface OcxModelRouteOverrideRule {
+  /** Target model id: a concrete "<provider>/<model>", bare native model, or "combo/<id>". */
+  target: string;
+  /** Fixed effort to apply, or "inherit" (default) to keep the client's requested effort. */
+  effort?: OcxModelRouteOverrideEffort;
+  /** Per-rule toggle. Default true. */
+  enabled?: boolean;
+}
+
+export interface OcxModelRouteOverrides {
+  /** Global kill-switch. Default false. */
+  enabled?: boolean;
+  /** Source-native-model-keyed override rules. Keys are exact native OpenAI model ids (e.g. "gpt-5.4"). */
+  rules: Record<string, OcxModelRouteOverrideRule>;
 }
 
 /**

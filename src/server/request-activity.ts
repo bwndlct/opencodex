@@ -13,6 +13,12 @@ export type RequestRoutePolicy = SessionRoutePolicy;
 export type RequestEffectiveUpstream = "codex_pool" | "codex_direct" | "company" | "provider" | "none";
 export type RequestFallbackReason = "all_personal_accounts_unavailable" | "company_upstream_unavailable";
 
+export interface RequestActivitySourceCounts {
+  gpt: number;
+  glm: number;
+  other: number;
+}
+
 export interface RequestRouteObservation {
   routePolicy: RequestRoutePolicy;
   requestedProvider?: string;
@@ -22,12 +28,16 @@ export interface RequestRouteObservation {
   effectiveModel?: string;
   effectiveUpstream: RequestEffectiveUpstream;
   fallbackReason?: RequestFallbackReason;
+  overrideSourceModel?: string;
+  overrideTargetModel?: string;
+  overrideEffort?: string;
 }
 
 export interface RequestActivitySession {
   rootSessionId: string;
   threadName?: string;
   activeRequests: number;
+  activeSourceCounts?: RequestActivitySourceCounts;
   executionSessionIds: string[];
   oldestStartedAt: number;
   routePolicy?: RequestRoutePolicy;
@@ -37,6 +47,9 @@ export interface RequestActivitySession {
   effectiveModel?: string;
   effectiveUpstream?: RequestEffectiveUpstream;
   fallbackReason?: RequestFallbackReason;
+  overrideSourceModel?: string;
+  overrideTargetModel?: string;
+  overrideEffort?: string;
 }
 
 export interface RequestActivitySnapshot {
@@ -95,6 +108,9 @@ function sanitizeRouteObservation(value: unknown): RequestRouteObservation | und
   const fallbackReason = isRequestFallbackReason(value.fallbackReason)
     ? value.fallbackReason
     : undefined;
+  const overrideSourceModel = sanitizeIdentityValue(value.overrideSourceModel);
+  const overrideTargetModel = sanitizeIdentityValue(value.overrideTargetModel);
+  const overrideEffort = sanitizeIdentityValue(value.overrideEffort);
 
   return {
     routePolicy: value.routePolicy,
@@ -105,7 +121,18 @@ function sanitizeRouteObservation(value: unknown): RequestRouteObservation | und
     ...(effectiveModel ? { effectiveModel } : {}),
     effectiveUpstream: value.effectiveUpstream,
     ...(fallbackReason ? { fallbackReason } : {}),
+    ...(overrideSourceModel ? { overrideSourceModel } : {}),
+    ...(overrideTargetModel ? { overrideTargetModel } : {}),
+    ...(overrideEffort ? { overrideEffort } : {}),
   };
+}
+
+function requestSource(observation: RequestRouteObservation): keyof RequestActivitySourceCounts {
+  const provider = observation.effectiveProvider?.toLowerCase();
+  const model = (observation.effectiveModel ?? observation.requestedModel)?.toLowerCase();
+  if (provider === "zai-anthropic" || model?.startsWith("glm-") === true) return "glm";
+  if (provider === "openai" || model?.startsWith("gpt-") === true) return "gpt";
+  return "other";
 }
 
 export function beginRequestActivity(
@@ -177,6 +204,8 @@ function getThreadNameMap(): Map<string, string> {
 export function snapshotRequestActivity(generatedAt = Date.now()): RequestActivitySnapshot {
   const sessions = new Map<string, {
     activeRequests: number;
+    activeSourceCounts: RequestActivitySourceCounts;
+    routedRequests: number;
     executionSessionIds: Set<string>;
     oldestStartedAt: number;
     latestRouteObservation?: StoredRouteObservation;
@@ -190,10 +219,16 @@ export function snapshotRequestActivity(generatedAt = Date.now()): RequestActivi
     }
     const session = sessions.get(activeRequest.rootSessionId) ?? {
       activeRequests: 0,
+      activeSourceCounts: { gpt: 0, glm: 0, other: 0 },
+      routedRequests: 0,
       executionSessionIds: new Set<string>(),
       oldestStartedAt: activeRequest.startedAt,
     };
     session.activeRequests += 1;
+    if (activeRequest.routeObservation) {
+      session.activeSourceCounts[requestSource(activeRequest.routeObservation.observation)] += 1;
+      session.routedRequests += 1;
+    }
     if (activeRequest.executionSessionId) session.executionSessionIds.add(activeRequest.executionSessionId);
     session.oldestStartedAt = Math.min(session.oldestStartedAt, activeRequest.startedAt);
     if (
@@ -215,6 +250,7 @@ export function snapshotRequestActivity(generatedAt = Date.now()): RequestActivi
         rootSessionId,
         ...(getThreadNameMap().get(rootSessionId) ? { threadName: getThreadNameMap().get(rootSessionId) } : {}),
         activeRequests: session.activeRequests,
+        ...(session.routedRequests > 0 ? { activeSourceCounts: session.activeSourceCounts } : {}),
         executionSessionIds: [...session.executionSessionIds].sort((left, right) => (
           left < right ? -1 : left > right ? 1 : 0
         )),

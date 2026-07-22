@@ -20,6 +20,7 @@ import {
 } from "../config";
 import { reconcileOAuthProviders } from "../oauth";
 import { invalidateCodexModelsCache } from "../codex/catalog";
+import { ensureDefaultMultiAgentV2Threads } from "../codex/features";
 import { runOpenAiTierStartupMigration } from "../providers/openai-tier-startup";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { providerCodexAccountMode } from "../providers/registry";
@@ -191,6 +192,8 @@ export function reloadServerConfig(server: object): OcxConfig {
 }
 
 export function startServer(port?: number) {
+  const threadDefault = ensureDefaultMultiAgentV2Threads();
+  if (!threadDefault.ok) console.warn(`[opencodex] Could not seed the multi-agent thread default: ${threadDefault.error}`);
   let currentConfig = prepareServerConfig(true, false);
   const config = currentConfig;
 

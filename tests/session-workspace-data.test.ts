@@ -17,6 +17,7 @@ describe("session workspace data", () => {
       sessions: [{
         rootSessionId: " root-session ",
         activeRequests: 2,
+        activeSourceCounts: { gpt: 1, glm: 1, other: 0 },
         executionSessionIds: ["child", "root", "child"],
         oldestStartedAt: 80,
         routePolicy: "personal_first",
@@ -37,6 +38,7 @@ describe("session workspace data", () => {
       sessions: [{
         rootSessionId: "root-session",
         activeRequests: 2,
+        activeSourceCounts: { gpt: 1, glm: 1, other: 0 },
         executionSessionIds: ["child", "root"],
         oldestStartedAt: 80,
         routePolicy: "personal_first",

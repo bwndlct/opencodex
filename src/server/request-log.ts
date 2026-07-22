@@ -50,6 +50,12 @@ export interface RequestLogContext {
   modelSupportsServiceTier?: boolean;
   responseServiceTier?: string;
   resolvedModel?: string;
+  /** Source model that triggered a model route override (e.g. "gpt-5.4"). */
+  overrideSourceModel?: string;
+  /** Override target model id (e.g. "zai-anthropic/glm-5.2"). */
+  overrideTargetModel?: string;
+  /** Override effort: "inherit" or a fixed value applied to the target. */
+  overrideEffort?: string;
   usage?: OcxUsage;
   usageLogInputTokens?: number;
   attempts?: PersistedUsageAttempt[];
@@ -94,6 +100,9 @@ export interface RequestLogEntry {
   modelSupportsServiceTier?: boolean;
   responseServiceTier?: string;
   resolvedModel?: string;
+  overrideSourceModel?: string;
+  overrideTargetModel?: string;
+  overrideEffort?: string;
   status: number;
   durationMs: number;
   errorCode?: string;
@@ -139,6 +148,9 @@ export function addRequestLog(entry: RequestLogEntry) {
       ...(entry.subagentKind ? { subagentKind: entry.subagentKind } : {}),
       ...(entry.isSpawnedChild !== undefined ? { isSpawnedChild: entry.isSpawnedChild } : {}),
       ...(entry.resolvedModel ? { resolvedModel: entry.resolvedModel } : {}),
+      ...(entry.overrideSourceModel ? { overrideSourceModel: entry.overrideSourceModel } : {}),
+      ...(entry.overrideTargetModel ? { overrideTargetModel: entry.overrideTargetModel } : {}),
+      ...(entry.overrideEffort ? { overrideEffort: entry.overrideEffort } : {}),
       ...(entry.requestedModel ? { requestedModel: entry.requestedModel } : {}),
       ...(entry.requestedEffort ? { requestedEffort: entry.requestedEffort } : {}),
       status: entry.status,
@@ -481,7 +493,10 @@ export function addFinalRequestLog(
     recoveryKinds: [...attempt.recoveryKinds],
     ...(attempt.usage ? { usage: { ...attempt.usage } } : {}),
   }));
-  const isCombo = (logCtx.requestedModel ?? "").startsWith("combo/")
+  const logicalComboModel = logCtx.overrideTargetModel?.startsWith("combo/")
+    ? logCtx.overrideTargetModel
+    : logCtx.requestedModel;
+  const isCombo = (logicalComboModel ?? "").startsWith("combo/")
     && (attempts?.length ?? 0) > 0;
   const aggregate = isCombo ? aggregateAttemptUsage(attempts ?? []) : null;
   const loggedUsage = aggregate?.usage ?? existing.usage;
@@ -490,7 +505,7 @@ export function addFinalRequestLog(
   addLog({
     requestId,
     timestamp: start,
-    model: isCombo ? logCtx.requestedModel! : logCtx.model,
+    model: isCombo ? logicalComboModel! : logCtx.model,
     provider: isCombo ? "combo" : logCtx.provider,
     ...(logCtx.surface ? { surface: logCtx.surface } : {}),
     ...(logCtx.executionSessionId ? { executionSessionId: logCtx.executionSessionId } : {}),
@@ -508,6 +523,9 @@ export function addFinalRequestLog(
     ...(logCtx.modelSupportsServiceTier !== undefined ? { modelSupportsServiceTier: logCtx.modelSupportsServiceTier } : {}),
     ...(logCtx.responseServiceTier ? { responseServiceTier: logCtx.responseServiceTier } : {}),
     ...(logCtx.resolvedModel ? { resolvedModel: logCtx.resolvedModel } : {}),
+    ...(logCtx.overrideSourceModel ? { overrideSourceModel: logCtx.overrideSourceModel } : {}),
+    ...(logCtx.overrideTargetModel ? { overrideTargetModel: logCtx.overrideTargetModel } : {}),
+    ...(logCtx.overrideEffort ? { overrideEffort: logCtx.overrideEffort } : {}),
     status: effectiveStatus,
     durationMs: Date.now() - start,
     ...(logCtx.firstOutputMs !== undefined ? { firstOutputMs: logCtx.firstOutputMs } : {}),

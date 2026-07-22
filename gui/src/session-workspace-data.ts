@@ -2,10 +2,17 @@ export type SessionRoutePolicy = "inherit" | "personal_first" | "company_first";
 export type EffectiveUpstream = "codex_pool" | "codex_direct" | "company" | "provider" | "none";
 export type FallbackReason = "all_personal_accounts_unavailable" | "company_upstream_unavailable";
 
+export interface ActiveSourceCounts {
+  gpt: number;
+  glm: number;
+  other: number;
+}
+
 export interface ActiveSession {
   rootSessionId: string;
   threadName?: string;
   activeRequests: number;
+  activeSourceCounts?: ActiveSourceCounts;
   executionSessionIds: string[];
   oldestStartedAt: number;
   routePolicy?: SessionRoutePolicy;
@@ -96,17 +103,31 @@ function parseExecutionSessionIds(value: unknown, scope: string): string[] {
   }))].sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
 }
 
+function parseActiveSourceCounts(value: unknown, scope: string): ActiveSourceCounts | undefined {
+  if (!isRecord(value)) return undefined;
+  return {
+    gpt: requiredNonNegativeNumber(value, "gpt", scope),
+    glm: requiredNonNegativeNumber(value, "glm", scope),
+    other: requiredNonNegativeNumber(value, "other", scope),
+  };
+}
+
 function parseActiveSession(value: unknown, index: number): ActiveSession {
   const scope = `sessions[${index}]`;
   if (!isRecord(value)) throw new Error(`${scope} must be an object`);
 
   const rootSessionId = sanitizeIdentityValue(value.rootSessionId);
   if (!rootSessionId) throw new Error(`${scope}.rootSessionId is invalid`);
+  const activeSourceCounts = parseActiveSourceCounts(
+    value.activeSourceCounts,
+    `${scope}.activeSourceCounts`,
+  );
 
   return {
     rootSessionId,
     ...(sanitizeIdentityValue(value.threadName) ? { threadName: sanitizeIdentityValue(value.threadName) } : {}),
     activeRequests: requiredNonNegativeNumber(value, "activeRequests", scope),
+    ...(activeSourceCounts ? { activeSourceCounts } : {}),
     executionSessionIds: parseExecutionSessionIds(value.executionSessionIds, scope),
     oldestStartedAt: requiredNonNegativeNumber(value, "oldestStartedAt", scope),
     ...(isSessionRoutePolicy(value.routePolicy) ? { routePolicy: value.routePolicy } : {}),

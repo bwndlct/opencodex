@@ -3,7 +3,7 @@ import Dashboard from "./pages/Dashboard";
 import Settings from "./pages/Settings";
 import Providers from "./pages/Providers";
 import Models from "./pages/Models";
-import Combos from "./pages/Combos";
+import ModelRouting from "./pages/ModelRouting";
 import Subagents from "./pages/Subagents";
 import Sessions from "./pages/Sessions";
 import Logs from "./pages/Logs";
@@ -276,7 +276,7 @@ export default function App() {
           {page === "sessions" && <Sessions apiBase={API_BASE} />}
           {page === "providers" && <Providers apiBase={API_BASE} />}
           {page === "models" && <Models apiBase={API_BASE} />}
-          {page === "combos" && <Combos apiBase={API_BASE} />}
+          {page === "combos" && <ModelRouting apiBase={API_BASE} />}
           {page === "subagents" && <Subagents apiBase={API_BASE} />}
           {page === "logs" && <Logs apiBase={API_BASE} />}
           {page === "debug" && <Debug apiBase={API_BASE} />}

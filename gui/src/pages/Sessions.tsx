@@ -271,6 +271,16 @@ export default function Sessions({ apiBase }: { apiBase: string }) {
   const activeIds = useMemo(() => new Set(active.map(session => session.rootSessionId)), [active]);
   const recentIdle = useMemo(() => recent.filter(session => !activeIds.has(session.rootSessionId)), [activeIds, recent]);
   const fallbackCount = active.filter(session => session.fallbackReason !== undefined).length;
+
+  const providerBreakdown = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const session of active) {
+      const provider = session.effectiveProvider ?? session.requestedProvider ?? "unknown";
+      const label = provider === "openai" ? "GPT" : provider === "zai-anthropic" ? "GLM" : provider;
+      counts.set(label, (counts.get(label) ?? 0) + 1);
+    }
+    return [...counts.entries()].map(([label, count]) => count + " " + label).join("  ");
+  }, [active]);
   const policyFor = (rootSessionId: string, routePolicy?: SessionRoutePolicy): PolicyState => (
     policies[rootSessionId] ?? { policy: routePolicy ?? "inherit", pending: false, error: false }
   );
@@ -299,7 +309,7 @@ export default function Sessions({ apiBase }: { apiBase: string }) {
       )}
 
       <div className="sessions-summary" aria-label={t("sessions.summaryAria")}>
-        <div><span>{t("sessions.active")}</span><strong>{active.length.toLocaleString(locale)}</strong></div>
+        <div><span>{t("sessions.active")}</span><strong>{providerBreakdown || active.length.toLocaleString(locale)}</strong></div>
         <div><span>{t("sessions.recent")}</span><strong>{recentIdle.length.toLocaleString(locale)}</strong></div>
         <div className={unattributedActiveRequests > 0 ? "has-unattributed" : ""}><span>{t("sessions.unattributed")}</span><strong>{unattributedActiveRequests.toLocaleString(locale)}</strong></div>
         <div className={fallbackCount > 0 ? "has-fallback" : ""}><span>{t("sessions.fallbacks")}</span><strong>{fallbackCount.toLocaleString(locale)}</strong></div>

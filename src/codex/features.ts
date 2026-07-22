@@ -20,6 +20,8 @@ import { realpathSync } from "node:fs";
 import { atomicWriteFile, expandUserPath } from "../config";
 import { CODEX_CONFIG_PATH } from "./paths";
 
+export const DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION = 16;
+
 // EOL preservation, local copies of inject.ts dominantEol/applyEol: importing
 // inject here would close a module cycle (features -> inject -> catalog -> features).
 function dominantEol(content: string): "\r\n" | "\n" {
@@ -316,8 +318,18 @@ function ensureDisabledV2Config(value: number | null, configPath?: string, migra
 /** Active logical concurrency value, falling back to the inactive storage. */
 export function getLogicalMaxThreads(configPath?: string): number | null {
   return isMultiAgentV2Enabled(configPath)
-    ? getMaxConcurrentThreads(configPath) ?? getAgentsMaxThreads(configPath)
+    ? getMaxConcurrentThreads(configPath) ?? getAgentsMaxThreads(configPath) ?? DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION
     : getAgentsMaxThreads(configPath) ?? getMaxConcurrentThreads(configPath);
+}
+
+/** Seed OpenCodex's v2 concurrency default without overriding any explicit user limit. */
+export function ensureDefaultMultiAgentV2Threads(configPath?: string): ConfigEditResult {
+  if (!isMultiAgentV2Enabled(configPath)
+    || getMaxConcurrentThreads(configPath) !== null
+    || getAgentsMaxThreads(configPath) !== null) {
+    return { ok: true, changed: false };
+  }
+  return setMaxConcurrentThreads(DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION, configPath);
 }
 
 function activeThreadComment(content: string, v2Enabled: boolean): string | undefined {
@@ -403,7 +415,9 @@ export function transitionMultiAgentV2(
   const preflightError = transitionConfigError(original);
   if (preflightError) return { ok: false, error: preflightError };
   const beforeEnabled = isMultiAgentV2Enabled(path);
-  const threadLimit = options.threadLimit ?? getLogicalMaxThreads(path);
+  const threadLimit = options.threadLimit
+    ?? getLogicalMaxThreads(path)
+    ?? (enabled ? DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION : null);
   const migratedComment = activeThreadComment(original, beforeEnabled);
   try {
     if (enabled) {

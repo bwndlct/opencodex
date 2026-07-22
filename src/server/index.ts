@@ -18,6 +18,7 @@ import {
 } from "../config";
 import { reconcileOAuthProviders } from "../oauth";
 import { invalidateCodexModelsCache } from "../codex/catalog";
+import { ensureDefaultMultiAgentV2Threads } from "../codex/features";
 import { runOpenAiTierStartupMigration } from "../providers/openai-tier-startup";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { providerCodexAccountMode } from "../providers/registry";
@@ -146,6 +147,8 @@ const WEBSOCKET_IDLE_TIMEOUT_SECONDS = 0;
 
 export function startServer(port?: number) {
   const config = runOpenAiTierStartupMigration(loadConfig());
+  const threadDefault = ensureDefaultMultiAgentV2Threads();
+  if (!threadDefault.ok) console.warn(`[opencodex] Could not seed the multi-agent thread default: ${threadDefault.error}`);
   applyProxyEnv(config);
   assertServerAuthConfig(config);
   // Refresh OAuth provider presets (models/noReasoningModels) from the registry so a proxy update

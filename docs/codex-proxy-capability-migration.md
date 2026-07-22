@@ -1,7 +1,7 @@
 # Codex Proxy Capability Migration
 
-Status: source migration complete except OpenAI dual-upstream fallback; real-provider
-and deployment tracks pending
+Status: source migration complete except OpenAI dual-upstream fallback; isolated
+Z.AI and company OpenAI canaries passed; formal deployment pending
 
 Baseline date: 2026-07-21
 
@@ -43,7 +43,7 @@ gate before the next batch starts.
 | Effective upstream and fallback observability | Completed in `f5e40af` | Batch 3E |
 | Session workspace/dashboard controls | Completed in `f6acbcd` | Batch 3F |
 | Personal Codex account pool | Existing and broader in OpenCodex | Gap audit only; do not port wholesale |
-| Company OpenAI Responses upstream | Found during shadow deployment audit | `passthrough` source path complete; real canary pending |
+| Company OpenAI Responses upstream | Found during shadow deployment audit | `passthrough` source path and isolated real canary complete |
 | Personal-pool to company automatic fallback | Present in codex-proxy | Separate follow-up; not yet equivalent |
 | First-output retry, stall timeout, cancellation | Equivalent or stronger after Phase 4 audit | No migration patch required |
 | Usage/cache/tool accounting | Equivalent or stronger fields; bounded retention completed in `26d4174` | Completed |
@@ -211,8 +211,8 @@ Status: completed against codex-proxy `main@9518cd1` and OpenCodex `main@908439b
 
 ### Phase 7: Company OpenAI Responses Compatibility
 
-Status: source implementation and fake-upstream tests complete; real company-upstream
-canary pending.
+Status: source implementation, fake-upstream tests, and isolated real
+company-upstream canary complete; formal deployment pending.
 
 - Add `authMode: "passthrough"` for a non-ChatGPT `openai-responses` endpoint.
 - A non-`forward` `openai` provider preserves its configured base URL and bypasses
@@ -224,6 +224,10 @@ canary pending.
   `/v1/responses/compact`.
 - The canonical `authMode: "forward"` official ChatGPT provider and account-pool
   behavior remain unchanged.
+- An isolated OpenCodex instance on `127.0.0.1:8788` completed a real Codex CLI
+  request through the configured company Responses endpoint and returned the exact
+  expected output. The formal `127.0.0.1:8787` service was not modified by this
+  canary.
 - This phase restores the current company-first path. It does not yet reproduce the
   old router's automatic pre-first-output fallback from an exhausted personal account
   pool to the company upstream; that requires an explicit dual-upstream policy and

@@ -2,14 +2,13 @@
 
 ## Hot deploy
 
-The formal LaunchAgent (`com.opencodex.proxy`) points directly at this source tree:
-`/Users/edy/Desktop/project/opencodex/src/cli/index.ts`, served by the bundled
-Bun at `node_modules/bun/bin/bun.exe`.
+The formal LaunchAgent (`com.opencodex.proxy`) points directly at this checkout's
+`src/cli/index.ts`, served by the bundled Bun at `node_modules/bun/bin/bun.exe`.
 
 After modifying source or GUI, deploy with exactly two commands:
 
 ```bash
-cd /Users/edy/Desktop/project/opencodex
+cd <opencodex-checkout>
 bun run build:gui && launchctl kickstart -k gui/$(id -u)/com.opencodex.proxy
 ```
 

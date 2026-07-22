@@ -149,6 +149,7 @@ describe("request activity store", () => {
     expect(snapshotRequestActivity(2).sessions).toEqual([{
       rootSessionId: "root-route",
       activeRequests: 1,
+      activeSourceCounts: { gpt: 0, glm: 0, other: 1 },
       executionSessionIds: [],
       oldestStartedAt: 1,
       routePolicy: "personal_first",
@@ -181,6 +182,7 @@ describe("request activity store", () => {
     expect(snapshotRequestActivity(2).sessions[0]).toEqual({
       rootSessionId: "root-recovery",
       activeRequests: 1,
+      activeSourceCounts: { gpt: 0, glm: 0, other: 1 },
       executionSessionIds: [],
       oldestStartedAt: 1,
       routePolicy: "personal_first",
@@ -238,6 +240,7 @@ describe("request activity store", () => {
     expect(snapshotRequestActivity(2).sessions[0]).toEqual({
       rootSessionId: "root-invalid-route",
       activeRequests: 1,
+      activeSourceCounts: { gpt: 0, glm: 0, other: 1 },
       executionSessionIds: [],
       oldestStartedAt: 1,
       routePolicy: "inherit",
@@ -263,6 +266,37 @@ describe("request activity store", () => {
         executionSessionIds: [],
         oldestStartedAt: 1,
       }],
+    });
+  });
+
+  test("counts GPT and GLM per active request within the same root session", () => {
+    beginRequestActivity("request-gpt", 1, { rootSessionId: "mixed-root" });
+    beginRequestActivity("request-glm-provider", 2, { rootSessionId: "mixed-root" });
+    beginRequestActivity("request-glm-model", 3, { rootSessionId: "mixed-root" });
+
+    updateRequestActivityRoute("request-gpt", {
+      routePolicy: "inherit",
+      effectiveProvider: "openai",
+      effectiveModel: "gpt-5.6-sol",
+      effectiveUpstream: "provider",
+    });
+    updateRequestActivityRoute("request-glm-provider", {
+      routePolicy: "inherit",
+      effectiveProvider: "zai-anthropic",
+      effectiveModel: "glm-5.2",
+      effectiveUpstream: "provider",
+    });
+    updateRequestActivityRoute("request-glm-model", {
+      routePolicy: "inherit",
+      effectiveProvider: "custom-provider",
+      effectiveModel: "glm-5.2",
+      effectiveUpstream: "provider",
+    });
+
+    expect(snapshotRequestActivity(4).sessions[0]).toMatchObject({
+      rootSessionId: "mixed-root",
+      activeRequests: 3,
+      activeSourceCounts: { gpt: 1, glm: 2, other: 0 },
     });
   });
 });

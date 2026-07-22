@@ -6,6 +6,7 @@ import {
   parseActiveSessionSnapshot,
   parseRecentSessions,
   type ActiveSession,
+  type ActiveSourceCounts,
   type RecentSession,
   type SessionRoutePolicy,
 } from "../session-workspace-data";
@@ -32,6 +33,22 @@ function modelLabel(provider: string | undefined, model: string | undefined): st
   if (!provider || !model) return model;
   const prefix = `${provider}/`;
   return model.startsWith(prefix) ? model.slice(prefix.length) : model;
+}
+
+function activeSourceSummary(
+  counts: ActiveSourceCounts | undefined,
+  total: number,
+  t: TFn,
+): string {
+  const gpt = counts?.gpt ?? 0;
+  const glm = counts?.glm ?? 0;
+  const other = (counts?.other ?? 0) + Math.max(0, total - gpt - glm - (counts?.other ?? 0));
+  const parts = [
+    ...(gpt > 0 ? [t("sessions.source.gpt", { count: gpt })] : []),
+    ...(glm > 0 ? [t("sessions.source.glm", { count: glm })] : []),
+    ...(other > 0 ? [t("sessions.source.other", { count: other })] : []),
+  ];
+  return parts.join(" ") || "0";
 }
 
 function RoutePair({
@@ -108,7 +125,9 @@ function ActiveSessionRow({
         <span className="session-meta">{t("sessions.started")} {formatAge(session.oldestStartedAt, now, t)}</span>
       </td>
       <td>
-        <div className="session-activity-count">{t("sessions.activeRequests", { count: session.activeRequests })}</div>
+        <div className="session-activity-count">
+          {activeSourceSummary(session.activeSourceCounts, session.activeRequests, t)}
+        </div>
       </td>
       <td>
         <RoutePair
@@ -271,6 +290,13 @@ export default function Sessions({ apiBase }: { apiBase: string }) {
   const activeIds = useMemo(() => new Set(active.map(session => session.rootSessionId)), [active]);
   const recentIdle = useMemo(() => recent.filter(session => !activeIds.has(session.rootSessionId)), [activeIds, recent]);
   const fallbackCount = active.filter(session => session.fallbackReason !== undefined).length;
+  const activeRequestCount = active.reduce((total, session) => total + session.activeRequests, 0);
+  const activeSourceCounts = useMemo(() => active.reduce<ActiveSourceCounts>((total, session) => ({
+    gpt: total.gpt + (session.activeSourceCounts?.gpt ?? 0),
+    glm: total.glm + (session.activeSourceCounts?.glm ?? 0),
+    other: total.other + (session.activeSourceCounts?.other ?? 0),
+  }), { gpt: 0, glm: 0, other: 0 }), [active]);
+  const activeSummary = activeSourceSummary(activeSourceCounts, activeRequestCount, t);
   const policyFor = (rootSessionId: string, routePolicy?: SessionRoutePolicy): PolicyState => (
     policies[rootSessionId] ?? { policy: routePolicy ?? "inherit", pending: false, error: false }
   );
@@ -299,7 +325,7 @@ export default function Sessions({ apiBase }: { apiBase: string }) {
       )}
 
       <div className="sessions-summary" aria-label={t("sessions.summaryAria")}>
-        <div><span>{t("sessions.active")}</span><strong>{active.length.toLocaleString(locale)}</strong></div>
+        <div><span>{t("sessions.active")}</span><strong>{activeSummary}</strong></div>
         <div><span>{t("sessions.recent")}</span><strong>{recentIdle.length.toLocaleString(locale)}</strong></div>
         <div className={unattributedActiveRequests > 0 ? "has-unattributed" : ""}><span>{t("sessions.unattributed")}</span><strong>{unattributedActiveRequests.toLocaleString(locale)}</strong></div>
         <div className={fallbackCount > 0 ? "has-fallback" : ""}><span>{t("sessions.fallbacks")}</span><strong>{fallbackCount.toLocaleString(locale)}</strong></div>
@@ -312,7 +338,7 @@ export default function Sessions({ apiBase }: { apiBase: string }) {
           <section className="sessions-section" aria-labelledby="sessions-active-title">
             <div className="sessions-section-head">
               <h3 id="sessions-active-title">{t("sessions.active")}</h3>
-              <span>{active.length.toLocaleString(locale)}</span>
+              <span>{activeSummary}</span>
             </div>
             {active.length === 0 ? (
               <EmptyState icon={<IconActivity />} title={t("sessions.emptyActive")} />

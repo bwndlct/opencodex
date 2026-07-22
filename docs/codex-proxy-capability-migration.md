@@ -1,10 +1,10 @@
 # Codex Proxy Capability Migration
 
-Status: active
+Status: source migration complete; real-provider and deployment tracks pending
 
 Baseline date: 2026-07-21
 
-- OpenCodex: `main@26d4174`
+- OpenCodex source audit: `main@908439b`
 - codex-proxy: `main@9518cd1`
 
 ## Goal
@@ -44,8 +44,10 @@ gate before the next batch starts.
 | Personal Codex account pool | Existing and broader in OpenCodex | Gap audit only; do not port wholesale |
 | First-output retry, stall timeout, cancellation | Equivalent or stronger after Phase 4 audit | No migration patch required |
 | Usage/cache/tool accounting | Equivalent or stronger fields; bounded retention completed in `26d4174` | Completed |
-| Incident history and health classification | Partial through logs/debug/health | Phase 5 gap audit |
-| macOS deployment hardening | OpenCodex has its own service/update lifecycle | Audit native path; do not copy proxy scripts |
+| Incident history and health classification | Completed in `2be98d6` and `908439b` | Migrated as retained incident projection plus local health report |
+| Drain readiness | Completed in `6cdd92e` | Migrated |
+| Bounded service and crash diagnostics | Completed in `b2b8260` and `c0c00e0` | Migrated with native OpenCodex service lifecycle |
+| macOS deployment hardening | OpenCodex has its own cross-platform service/update lifecycle | Equivalent; do not copy proxy scripts |
 | GLM Broker lifecycle and sandbox | Not needed in the target architecture | Intentionally excluded |
 
 ## Invariants
@@ -165,20 +167,44 @@ Status: completed in `26d4174`.
 
 ### Phase 5: Diagnostics and Incident Parity
 
-Status: pending.
+Status: completed through `908439b`.
 
-- Compare redacted request logs, debug buffers, health classification, and incident
-  retention against codex-proxy.
-- Add only diagnostics that answer a concrete hidden-failure question.
-- Keep bounded local retention and privacy scanning as hard gates.
+- Add `/api/incidents` as a bounded, redacted projection over retained usage shards;
+  do not duplicate a second incident store.
+- Add `/api/drain` as a read-only view of the existing graceful-drain lifecycle.
+- Put launchd, systemd, Task Scheduler, and WinSW behind one internal
+  `service-runner`. It captures the real proxy child's stdout/stderr and rotates
+  `service.log` during the same long-lived process at 5 MiB with four backups.
+- Bound `crash.log` synchronously at 5 MiB with two backups so process-level
+  diagnostics remain best-effort and available inside exception handlers.
+- Add authenticated `/api/health` with relay, default-provider configuration, and
+  incident-history components. It performs no upstream probe and exposes no path,
+  request, provider URL, account, or credential material.
+- Keep `/healthz` as cheap process identity/liveness, `/api/drain` as readiness, and
+  `/api/providers/test` as the explicit active upstream probe.
+- Existing usage-debug retention was already bounded and required no patch.
 
 ### Phase 6: Capability Closure Audit
 
-Status: pending.
+Status: completed against codex-proxy `main@9518cd1` and OpenCodex `main@908439b`.
 
-- Re-run the matrix against the then-current `codex-proxy/main` and OpenCodex HEAD.
-- Mark each capability equivalent, migrated, intentionally excluded, or blocked.
-- Run typecheck, privacy scan, focused suites, and the full source suite.
+- The protocol/provider audit found native Anthropic translation, tool pairing,
+  streaming, cancellation, metadata, and usage support equivalent or stronger.
+- The request/runtime audit found identity, root-Session aggregation, account
+  affinity, per-Session policy, retry, stall, cancellation, result preservation,
+  and shutdown equivalent or migrated.
+- The operations audit found incident history, drain readiness, bounded logs,
+  health classification, service lifecycle, and runtime identity equivalent or
+  migrated after Phase 5.
+- GLM Broker jobs, OpenCode sandbox profiles, VM/container isolation, orphaned
+  OpenCode child cleanup, and Broker recovery remain intentionally excluded because
+  OpenCodex does not host OpenCode jobs.
+- Focused service/lifecycle gate: 88 pass, 0 fail. Phase 5 focused health/incident/
+  drain gate: 18 pass, 0 fail. Typecheck and privacy scan pass.
+- The final full source suite reached 3311 pass / 4 fail / 1 error across 287
+  files. Three failures match the known local DNS/SSRF and user-config baseline;
+  the fourth was a provider-management timeout. Its focused rerun passed, leaving
+  56 pass / 2 known DNS/SSRF failures in that file and no new source regression.
 
 ## Real Z.AI Validation Track
 

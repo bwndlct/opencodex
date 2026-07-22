@@ -6,7 +6,6 @@ import {
   parseActiveSessionSnapshot,
   parseRecentSessions,
   type ActiveSession,
-  type EffectiveUpstream,
   type RecentSession,
   type SessionRoutePolicy,
 } from "../session-workspace-data";
@@ -29,20 +28,6 @@ function formatAge(startedAt: number, now: number, t: TFn): string {
   return t("sessions.age.hours", { count: Math.floor(minutes / 60) });
 }
 
-function upstreamTone(upstream: EffectiveUpstream | undefined, fallback: boolean): string {
-  if (fallback) return "badge-amber";
-  if (upstream === "codex_pool") return "badge-green";
-  if (upstream === "codex_direct" || upstream === "provider") return "badge-accent";
-  return "badge-muted";
-}
-
-function upstreamLabel(upstream: EffectiveUpstream | undefined, t: TFn): string {
-  if (upstream === "codex_pool") return t("sessions.upstream.codexPool");
-  if (upstream === "codex_direct") return t("sessions.upstream.codexDirect");
-  if (upstream === "provider") return t("sessions.upstream.provider");
-  return t("sessions.upstream.none");
-}
-
 function modelLabel(provider: string | undefined, model: string | undefined): string | undefined {
   if (!provider || !model) return model;
   const prefix = `${provider}/`;
@@ -52,31 +37,22 @@ function modelLabel(provider: string | undefined, model: string | undefined): st
 function RoutePair({
   requestedProvider,
   requestedModel,
+  requestedEffort,
   effectiveProvider,
   effectiveModel,
   t,
 }: {
   requestedProvider?: string;
   requestedModel?: string;
+  requestedEffort?: string;
   effectiveProvider?: string;
   effectiveModel?: string;
   t: TFn;
 }) {
   if (!requestedModel && !effectiveModel) return <span className="muted">{t("sessions.noRoute")}</span>;
-  const requestedLabel = modelLabel(requestedProvider, requestedModel);
-  const effectiveLabel = modelLabel(effectiveProvider, effectiveModel);
+  const displayModel = modelLabel(requestedProvider, requestedModel) ?? modelLabel(effectiveProvider, effectiveModel) ?? "—";
   return (
-    <div className="session-route-pair">
-      <div>
-        <span className="session-route-label">{t("sessions.requested")}</span>
-        <code>{requestedProvider ? `${requestedProvider} / ` : ""}{requestedLabel ?? "—"}</code>
-      </div>
-      <span className="session-route-arrow" aria-hidden="true">→</span>
-      <div>
-        <span className="session-route-label">{t("sessions.effective")}</span>
-        <code>{effectiveProvider ? `${effectiveProvider} / ` : ""}{effectiveLabel ?? "—"}</code>
-      </div>
-    </div>
+    <code className="session-model-display">{displayModel}{requestedEffort ? ` · ${requestedEffort}` : ""}</code>
   );
 }
 
@@ -125,38 +101,24 @@ function ActiveSessionRow({
   onPolicy: (rootSessionId: string, policy: SessionRoutePolicy) => void;
   t: TFn;
 }) {
-  const fallback = session.fallbackReason === "all_personal_accounts_unavailable";
   return (
     <tr>
       <td className="session-id-cell">
-        <div className="session-id-line"><span className="dot dot-green" aria-hidden="true" /><code>{session.rootSessionId}</code></div>
+        <div className="session-id-line"><span className="dot dot-green" aria-hidden="true" /><span className="session-thread-name">{session.threadName ?? session.rootSessionId}</span></div>
         <span className="session-meta">{t("sessions.started")} {formatAge(session.oldestStartedAt, now, t)}</span>
       </td>
       <td>
         <div className="session-activity-count">{t("sessions.activeRequests", { count: session.activeRequests })}</div>
-        <div className="session-executions">
-          {session.executionSessionIds.map(id => (
-            <span key={id} className="session-execution-chip">
-              <span>{id === session.rootSessionId ? t("sessions.main") : t("sessions.child")}</span>
-              <code>{id}</code>
-            </span>
-          ))}
-        </div>
       </td>
       <td>
         <RoutePair
           requestedProvider={session.requestedProvider}
           requestedModel={session.requestedModel}
+          requestedEffort={session.requestedEffort}
           effectiveProvider={session.effectiveProvider}
           effectiveModel={session.effectiveModel}
           t={t}
         />
-      </td>
-      <td>
-        <span className={`badge ${upstreamTone(session.effectiveUpstream, fallback)}`}>
-          {upstreamLabel(session.effectiveUpstream, t)}
-        </span>
-        {fallback && <div className="session-fallback"><IconAlert />{t("sessions.fallback.personalUnavailable")}</div>}
       </td>
       <td><PolicyControl rootSessionId={session.rootSessionId} state={policy} onChange={onPolicy} t={t} /></td>
     </tr>
@@ -179,24 +141,22 @@ function RecentSessionRow({
   return (
     <tr>
       <td className="session-id-cell">
-        <div className="session-id-line"><span className="dot session-dot-idle" aria-hidden="true" /><code>{session.rootSessionId}</code></div>
+        <div className="session-id-line"><span className="dot session-dot-idle" aria-hidden="true" /><span className="session-thread-name">{session.threadName ?? session.rootSessionId}</span></div>
         <span className="session-meta">{t("sessions.lastSeen")} {formatTime(session.lastSeenAt, locale)}</span>
       </td>
       <td>
-        {session.executionSessionId
-          ? <span className="session-execution-chip"><span>{session.executionSessionId === session.rootSessionId ? t("sessions.main") : t("sessions.child")}</span><code>{session.executionSessionId}</code></span>
-          : <span className="muted">—</span>}
+        <span className="muted">—</span>
       </td>
       <td>
         <RoutePair
           requestedProvider={session.requestedProvider}
           requestedModel={session.requestedModel}
+          requestedEffort={session.requestedEffort}
           effectiveProvider={session.effectiveProvider}
           effectiveModel={session.effectiveModel}
           t={t}
         />
       </td>
-      <td><span className="badge badge-muted">{t("sessions.status.recent")}</span></td>
       <td><PolicyControl rootSessionId={session.rootSessionId} state={policy} onChange={onPolicy} t={t} /></td>
     </tr>
   );
@@ -357,15 +317,14 @@ export default function Sessions({ apiBase }: { apiBase: string }) {
             {active.length === 0 ? (
               <EmptyState icon={<IconActivity />} title={t("sessions.emptyActive")} />
             ) : (
-              <div className="tbl-wrap sessions-table-wrap">
-                <table className="tbl sessions-table">
-                  <thead><tr>
-                    <th>{t("sessions.col.session")}</th>
-                    <th>{t("sessions.col.activity")}</th>
-                    <th>{t("sessions.col.route")}</th>
-                    <th>{t("sessions.col.upstream")}</th>
-                    <th>{t("sessions.col.policy")}</th>
-                  </tr></thead>
+             <div className="tbl-wrap sessions-table-wrap">
+               <table className="tbl sessions-table">
+                 <thead><tr>
+                   <th>{t("sessions.col.session")}</th>
+                   <th>{t("sessions.col.activity")}</th>
+                   <th>{t("sessions.col.model")}</th>
+                   <th>{t("sessions.col.policy")}</th>
+                 </tr></thead>
                   <tbody>{active.map(session => (
                     <ActiveSessionRow
                       key={session.rootSessionId}
@@ -389,15 +348,14 @@ export default function Sessions({ apiBase }: { apiBase: string }) {
             {recentIdle.length === 0 ? (
               <EmptyState title={t("sessions.emptyRecent")} />
             ) : (
-              <div className="tbl-wrap sessions-table-wrap">
-                <table className="tbl sessions-table">
-                  <thead><tr>
-                    <th>{t("sessions.col.session")}</th>
-                    <th>{t("sessions.col.execution")}</th>
-                    <th>{t("sessions.col.route")}</th>
-                    <th>{t("sessions.col.status")}</th>
-                    <th>{t("sessions.col.policy")}</th>
-                  </tr></thead>
+             <div className="tbl-wrap sessions-table-wrap">
+               <table className="tbl sessions-table">
+                 <thead><tr>
+                   <th>{t("sessions.col.session")}</th>
+                   <th>{t("sessions.col.execution")}</th>
+                   <th>{t("sessions.col.model")}</th>
+                   <th>{t("sessions.col.policy")}</th>
+                 </tr></thead>
                   <tbody>{recentIdle.map(session => (
                     <RecentSessionRow
                       key={session.rootSessionId}

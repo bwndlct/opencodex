@@ -28,7 +28,7 @@ import { stopProxy } from "../lib/process-control";
 import { loadServiceTokenFromFile } from "../lib/service-secrets";
 import { runServiceLogSupervisor } from "../lib/service-log-supervisor";
 import { serviceCommand, serviceStatusSummary, stopServiceIfInstalled, uninstallServiceIfInstalled } from "../service";
-import { drainAndShutdown, startServer } from "../server";
+import { drainAndShutdown, reloadServerConfig, startServer } from "../server";
 import { injectSystemEnv, revertSystemEnv } from "../server/system-env";
 import { buildDesktop3pRegistry } from "../claude/desktop-3p";
 import { installShellHook, uninstallShellHook } from "../server/system-env";
@@ -203,9 +203,14 @@ async function handleStart(options: { block?: boolean } = {}) {
 
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
-  // The launcher (bin/ocx.mjs) forwards SIGHUP too (e.g. terminal close); handle it
-  // gracefully here so it drains + cleans up instead of a default immediate kill.
-  process.on("SIGHUP", shutdown);
+  process.on("SIGHUP", () => {
+    try {
+      reloadServerConfig(server);
+      console.log("\n↻ OpenCodex configuration reloaded.");
+    } catch (error) {
+      console.error(`\n⚠️  Configuration reload failed; keeping the previous configuration: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  });
   process.on("exit", syncCleanup);
 
   // System-wide env injection AFTER signal handlers are registered (crash safety:

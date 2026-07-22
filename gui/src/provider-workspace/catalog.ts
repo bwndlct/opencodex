@@ -104,6 +104,7 @@ function isConfigurationReady(p: WorkspaceProvider): boolean {
   return p.keyOptional === true ||
     p.authMode === "oauth" ||
     p.authMode === "forward" ||
+    p.authMode === "passthrough" ||
     p.authMode === "local" ||
     hasLoopbackBaseUrl(p.baseUrl) ||
     p.hasApiKey === true;

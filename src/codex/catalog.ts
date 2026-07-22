@@ -27,6 +27,7 @@ import {
 } from "../combos";
 import type { NormalizedComboConfig } from "../combos/types";
 import { redactSecretString } from "../lib/redact";
+import { forceMaxCatalogModel } from "../server/max-reasoning-policy";
 import upstreamModelsSnapshot from "./data/upstream-models.json";
 
 const BUNDLED_CATALOG_CACHE_MS = 60_000;
@@ -311,6 +312,7 @@ export interface CatalogModel {
   owned_by?: string;
   reasoningEfforts?: string[];
   defaultReasoningEffort?: string;
+  preserveExactReasoningEfforts?: boolean;
   contextWindow?: number;
   maxInputTokens?: number;
   contextCap?: number;
@@ -856,6 +858,13 @@ function isExactComboCatalogModel(
   return model !== undefined && exactComboSlugs.has(`${model.provider}/${model.id}`);
 }
 
+function preservesExactReasoningEfforts(
+  model: CatalogModel | undefined,
+  exactComboSlugs: ReadonlySet<string>,
+): boolean {
+  return model?.preserveExactReasoningEfforts === true || isExactComboCatalogModel(model, exactComboSlugs);
+}
+
 function deriveEntry(
   template: RawEntry | null,
   slug: string,
@@ -864,7 +873,8 @@ function deriveEntry(
   model?: CatalogModel,
   exactComboSlugs: ReadonlySet<string> = new Set(),
 ): RawEntry {
-  const preserveExact = isExactComboCatalogModel(model, exactComboSlugs);
+  const exactCombo = isExactComboCatalogModel(model, exactComboSlugs);
+  const preserveExactReasoning = preservesExactReasoningEfforts(model, exactComboSlugs);
   if (!slug.includes("/")) {
     // Supported native slug covered by the upstream snapshot: use the REAL entry (exact
     // reasoning ladder — e.g. luna has no ultra — default effort, identity, model_messages)
@@ -895,7 +905,7 @@ function deriveEntry(
           `You are a coding agent powered by the ${modelName} model. Do not claim to be GPT-5 or made by OpenAI.`,
         );
       }
-      applyReasoningLevels(e, model?.reasoningEfforts, model?.defaultReasoningEffort, preserveExact);
+      applyReasoningLevels(e, model?.reasoningEfforts, model?.defaultReasoningEffort, preserveExactReasoning);
       normalizeRoutedCatalogEntry(e, model?.parallelToolCalls === true);
       if (model) applyJawcodeCatalogMetadata(e, model.provider, model.id, model.contextCap);
       applyCatalogModelMetadata(e, model);
@@ -916,7 +926,7 @@ function deriveEntry(
       }
     }
     return ensureStrictCatalogFields(normalizeServiceTiers(e), {
-      preserveExactInputModalities: preserveExact,
+      preserveExactInputModalities: exactCombo,
     });
   }
   // Fallback when no template is available (best-effort; strict parser may need more).
@@ -927,7 +937,7 @@ function deriveEntry(
     ...(slug.includes("/") ? { web_search_tool_type: "text_and_image", supports_search_tool: true } : {}),
   };
   if (slug.includes("/")) {
-    applyReasoningLevels(entry, model?.reasoningEfforts, model?.defaultReasoningEffort, preserveExact);
+    applyReasoningLevels(entry, model?.reasoningEfforts, model?.defaultReasoningEffort, preserveExactReasoning);
   }
   else {
     applyReasoningLevels(entry, isGpt56NativeSlug(slug) ? undefined : ["low", "medium", "high", "xhigh"]);
@@ -937,7 +947,7 @@ function deriveEntry(
   applyCatalogModelMetadata(entry, model);
   applyNativeOpenAiContextOverride(entry);
   return ensureStrictCatalogFields(normalizeServiceTiers(entry), {
-    preserveExactInputModalities: preserveExact,
+    preserveExactInputModalities: exactCombo,
   });
 }
 
@@ -1445,7 +1455,15 @@ export async function gatherRoutedModels(config: OcxConfig): Promise<CatalogMode
     // Drop image/video generation models (e.g. Grok image/video) by default. Cursor's static catalog
     // intentionally mirrors Cursor's public model table, including Gemini image preview, so the
     // exposure decision goes through shouldExposeRoutedModel (single choke point).
-    .filter(shouldExposeRoutedModel);
+    .filter(shouldExposeRoutedModel)
+    .map(model => forceMaxCatalogModel(`${model.provider}/${model.id}`, config)
+      ? {
+        ...model,
+        reasoningEfforts: ["max"],
+        defaultReasoningEffort: "max",
+        preserveExactReasoningEfforts: true,
+      }
+      : model);
   const memberByKey = new Map(all.map(model => [`${model.provider}/${model.id}`, model]));
   for (const id of listComboIds(config)) {
     const combo = getCombo(config, id);

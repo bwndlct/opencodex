@@ -85,6 +85,7 @@ export function selectOpenAiImagesProvider(config: OcxConfig): OpenAiImagesProvi
     && provider.disabled !== true
     && provider.adapter === "openai-responses"
     && provider.authMode !== "forward"
+    && provider.authMode !== "passthrough"
     && provider.baseUrl.replace(/\/+$/, "") === "https://api.openai.com/v1"
   ) {
     const apiKey = resolveEnvValue(provider.apiKey)?.trim();

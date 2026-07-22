@@ -7,7 +7,11 @@ import {
 import { markAccountNeedsReauth } from "./account-runtime-state";
 import { isCodexAccountUsable } from "./account-usability";
 import { MAIN_CODEX_ACCOUNT_ID, getMainAccountToken } from "./main-account";
-import { getCodexAccountCooldownUntil, resolveCodexAccountForThreadDetailed } from "./routing";
+import {
+  getCodexAccountCooldownUntil,
+  resolveAlternateCodexAccountForThread,
+  resolveCodexAccountForThreadDetailed,
+} from "./routing";
 import { getAccountQuota } from "./quota";
 import type { CodexAccountMode, OcxConfig, OcxProviderConfig } from "../types";
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
@@ -37,6 +41,7 @@ export type OcxRuntimeProviderConfig = OcxProviderConfig & {
 
 export interface ResolveCodexAuthContextOptions {
   rootSessionId?: string;
+  excludedAccountIds?: ReadonlySet<string>;
 }
 
 export class CodexAuthContextError extends Error {
@@ -104,7 +109,9 @@ export async function resolveCodexAuthContext(
     return { kind: "main", accountId: null };
   }
   const threadId = options.rootSessionId ?? headers.get("x-codex-parent-thread-id");
-  const resolution = resolveCodexAccountForThreadDetailed(threadId, config);
+  const resolution = options.excludedAccountIds?.size
+    ? resolveAlternateCodexAccountForThread(threadId, config, options.excludedAccountIds)
+    : resolveCodexAccountForThreadDetailed(threadId, config);
   if (resolution.status === "expired") throw new CodexThreadAffinityExpiredError(resolution.accountId);
   const accountId = resolution.status === "selected" ? resolution.accountId : null;
   if (!accountId) throw new CodexPoolAuthenticationError();

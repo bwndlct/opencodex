@@ -2,7 +2,7 @@ export interface ProviderPayloadForm {
   name: string;
   adapter: string;
   baseUrl: string;
-  authMode: "key" | "forward" | "oauth" | "local";
+  authMode: "key" | "forward" | "passthrough" | "oauth" | "local";
   apiKey: string;
   defaultModel: string;
   allowPrivateNetwork?: boolean;
@@ -30,7 +30,7 @@ export interface ProviderPayload {
   baseUrl: string;
   apiKey?: string;
   defaultModel?: string;
-  authMode?: "key" | "forward" | "oauth";
+  authMode?: "key" | "forward" | "passthrough" | "oauth";
   codexAccountMode?: "pool" | "direct";
   allowPrivateNetwork?: boolean;
 }
@@ -41,7 +41,7 @@ export function buildProviderPayload(form: ProviderPayloadForm): ProviderPayload
     baseUrl: form.baseUrl.trim(),
   };
 
-  if (form.authMode === "key" || form.authMode === "forward") {
+  if (form.authMode === "key" || form.authMode === "forward" || form.authMode === "passthrough") {
     provider.authMode = form.authMode;
   }
   if (form.authMode === "key" && form.apiKey.trim()) {

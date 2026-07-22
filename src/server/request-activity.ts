@@ -10,8 +10,8 @@ export interface RequestActivityIdentity {
 }
 
 export type RequestRoutePolicy = SessionRoutePolicy;
-export type RequestEffectiveUpstream = "codex_pool" | "codex_direct" | "provider" | "none";
-export type RequestFallbackReason = "all_personal_accounts_unavailable";
+export type RequestEffectiveUpstream = "codex_pool" | "codex_direct" | "company" | "provider" | "none";
+export type RequestFallbackReason = "all_personal_accounts_unavailable" | "company_upstream_unavailable";
 
 export interface RequestRouteObservation {
   routePolicy: RequestRoutePolicy;
@@ -66,18 +66,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isRequestRoutePolicy(value: unknown): value is RequestRoutePolicy {
-  return value === "inherit" || value === "personal_first";
+  return value === "inherit" || value === "personal_first" || value === "company_first";
 }
 
 function isRequestEffectiveUpstream(value: unknown): value is RequestEffectiveUpstream {
   return value === "codex_pool"
     || value === "codex_direct"
+    || value === "company"
     || value === "provider"
     || value === "none";
 }
 
 function isRequestFallbackReason(value: unknown): value is RequestFallbackReason {
-  return value === "all_personal_accounts_unavailable";
+  return value === "all_personal_accounts_unavailable" || value === "company_upstream_unavailable";
 }
 
 function sanitizeRouteObservation(value: unknown): RequestRouteObservation | undefined {

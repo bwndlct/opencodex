@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { atomicWriteFile, getConfigDir, hardenConfigDir } from "../config";
 import { sanitizeIdentityValue } from "./request-identity";
 
-export type SessionRoutePolicy = "inherit" | "personal_first";
+export type SessionRoutePolicy = "inherit" | "personal_first" | "company_first";
 
 export interface SessionRoutePolicyRecord {
   rootSessionId: string;
@@ -35,7 +35,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function isSessionRoutePolicy(value: unknown): value is SessionRoutePolicy {
-  return value === "inherit" || value === "personal_first";
+  return value === "inherit" || value === "personal_first" || value === "company_first";
 }
 
 export function normalizeRootSessionId(value: unknown): string | undefined {

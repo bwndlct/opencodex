@@ -1,6 +1,6 @@
-export type SessionRoutePolicy = "inherit" | "personal_first";
-export type EffectiveUpstream = "codex_pool" | "codex_direct" | "provider" | "none";
-export type FallbackReason = "all_personal_accounts_unavailable";
+export type SessionRoutePolicy = "inherit" | "personal_first" | "company_first";
+export type EffectiveUpstream = "codex_pool" | "codex_direct" | "company" | "provider" | "none";
+export type FallbackReason = "all_personal_accounts_unavailable" | "company_upstream_unavailable";
 
 export interface ActiveSession {
   rootSessionId: string;
@@ -72,18 +72,19 @@ function requiredNonNegativeNumber(
 }
 
 function isSessionRoutePolicy(value: unknown): value is SessionRoutePolicy {
-  return value === "inherit" || value === "personal_first";
+  return value === "inherit" || value === "personal_first" || value === "company_first";
 }
 
 function isEffectiveUpstream(value: unknown): value is EffectiveUpstream {
   return value === "codex_pool"
     || value === "codex_direct"
+    || value === "company"
     || value === "provider"
     || value === "none";
 }
 
 function isFallbackReason(value: unknown): value is FallbackReason {
-  return value === "all_personal_accounts_unavailable";
+  return value === "all_personal_accounts_unavailable" || value === "company_upstream_unavailable";
 }
 
 function parseExecutionSessionIds(value: unknown, scope: string): string[] {

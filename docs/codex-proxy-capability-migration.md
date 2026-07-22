@@ -1,11 +1,13 @@
 # Codex Proxy Capability Migration
 
-Status: source migration complete except OpenAI dual-upstream fallback; isolated
-and formal provider canaries passed; OpenCodex is deployed on `127.0.0.1:8787`
+Status: source migration complete through OpenAI dual-upstream routing and SIGHUP
+reload; isolated Z.AI and formal company OpenAI canaries passed; dual-route,
+maximum-reasoning, and updated-service canaries remain pending. OpenCodex is
+already deployed on `127.0.0.1:8787`, but not yet with Phases 8-10.
 
-Baseline date: 2026-07-21
+Baseline date: 2026-07-22
 
-- OpenCodex source audit: `main@908439b`
+- OpenCodex implementation baseline: `main@aae4493`
 - codex-proxy: `main@9518cd1`
 
 ## Goal
@@ -39,13 +41,14 @@ gate before the next batch starts.
 | Request/session identity | Missing before Batch 3A | Completed in `5afd49a` |
 | Root Session active-request aggregation | Completed in `cedf128` | Batch 3B |
 | Main/child account affinity by root Session | Completed in `911f8d8` | Batch 3C |
-| Per-Session `inherit` / `personal_first` policy | Completed in `8349d72` | Batch 3D |
+| Per-Session `inherit` / `personal_first` / `company_first` policy | Completed in `8349d72`, extended in Phase 8 | Batch 3D plus dual-upstream routing |
 | Effective upstream and fallback observability | Completed in `f5e40af` | Batch 3E |
 | Session workspace/dashboard controls | Completed in `f6acbcd` | Batch 3F |
 | Personal Codex account pool | Existing and broader in OpenCodex | Gap audit only; do not port wholesale |
 | Company OpenAI Responses upstream | Found during shadow deployment audit | `passthrough` source path and isolated real canary complete |
-| Personal-pool to company automatic fallback | Present in codex-proxy | Separate follow-up; not yet equivalent |
+| Personal-pool/company dual-upstream fallback | Present in codex-proxy | Migrated in Phase 8; real dual-route canary pending |
 | First-output retry, stall timeout, cancellation | Equivalent or stronger after Phase 4 audit | No migration patch required |
+| Luna ordinary-turn reasoning forced to max | Missing before Phase 10 | Migrated with exact model matching and legacy exemptions |
 | Usage/cache/tool accounting | Equivalent or stronger fields; bounded retention completed in `26d4174` | Completed |
 | Incident history and health classification | Completed in `2be98d6` and `908439b` | Migrated as retained incident projection plus local health report |
 | Drain readiness | Completed in `6cdd92e` | Migrated |
@@ -232,10 +235,79 @@ formal deployment complete.
   request through the company endpoint without a command-line base-URL override.
   The current Codex CLI first attempts WebSocket transport, receives `426`, and
   successfully falls back to HTTP.
-- This phase restores the current company-first path. It does not yet reproduce the
-  old router's automatic pre-first-output fallback from an exhausted personal account
-  pool to the company upstream; that requires an explicit dual-upstream policy and
-  separate retry/credential-isolation tests.
+- At Phase 7 completion this restored only the company-first path. The explicit
+  dual-upstream policy and retry/credential-isolation work followed in Phase 8.
+
+### Phase 8: OpenAI Dual-Upstream Routing
+
+Status: source implementation and isolated tests complete; real dual-route canary
+pending.
+
+- `openAiDualUpstream` names the company `openai-responses` provider and persists a
+  default `personal_first` or `company_first` policy. A root Session may override it
+  with `inherit`, `personal_first`, or `company_first` without changing the global
+  provider configuration.
+- A personal-first request tries eligible personal accounts one at a time. Only
+  authentication, unavailable-model, timeout, rate-limit, and upstream failures may
+  advance to another account or the company endpoint; request-shape errors stop.
+- A company-first request may fall back to the personal pool on the same bounded
+  failure classes. Company credentials come only from the inbound request, while
+  personal attempts use only the selected Codex account credential.
+- Cross-upstream replay is allowed only before a response body produces its first
+  byte. Empty or failed-before-output bodies are unavailable; once output is
+  committed, later stream failure is returned to the caller and never replayed.
+- Automatic default switching from personal-first to company-first is persisted only
+  after the company fallback actually produces output. Failed company fallback does
+  not change the default. Persistence compares the current disk policy first, so a
+  request started before SIGHUP cannot overwrite a newer configuration snapshot.
+- The same policy applies to `/v1/responses/compact`; compact responses are fully
+  buffered before the selected upstream is committed.
+- Request activity and attempt logs expose policy, effective upstream, and bounded
+  fallback reason without account IDs or credentials.
+
+### Phase 9: SIGHUP Configuration Reload
+
+Status: source implementation and isolated tests complete; service canary pending.
+
+- `SIGHUP` loads and validates a complete new configuration, then atomically swaps the
+  snapshot used by future HTTP and WebSocket turns. In-flight requests retain their
+  previous snapshot.
+- Invalid configuration leaves the running snapshot untouched and reports a bounded
+  error. Changes to hostname, port, or process-level proxy settings require a normal
+  drain and restart.
+- `SIGINT` and `SIGTERM` keep the existing graceful-drain behavior. The service
+  launcher may continue forwarding `SIGHUP`; it no longer causes the child to exit.
+
+### Phase 10: Luna and GLM Maximum Reasoning Policy
+
+Status: source implementation and isolated tests complete; deployed canary pending.
+
+- Ordinary requests whose requested model exactly matches `lunaReasoningMaxModels`
+  are raised to `reasoning.effort: "max"`. The default exact set is
+  `["gpt-5.6-luna"]`; an empty configured list disables the policy.
+- Matching is trimmed and case-sensitive. Namespaced aliases and substring matches
+  do not inherit the rule unless explicitly configured.
+- `request_kind: "memory"`, explicit `low`, and already-`max` requests remain
+  unchanged, matching the old proxy contract. The explicit-effort check covers both
+  nested `reasoning.effort` and legacy top-level `reasoning_effort`.
+- Rewrites keep parsed adapter options, nested raw Responses reasoning, and an
+  existing legacy top-level field synchronized. Malformed nested reasoning is left
+  unchanged instead of being silently repaired.
+- An explicit global or subagent effort cap still wins after the Luna raise. This
+  preserves OpenCodex's documented operator ceiling while keeping uncapped Luna
+  turns equivalent to codex-proxy.
+- Every request whose original routed model exactly matches `glmReasoningMaxModels`
+  is raised to `reasoning.effort: "max"`, including memory and explicitly low-effort
+  requests. The default exact set is `["zai-anthropic/glm-5.2"]`; an empty list
+  disables the GLM policy.
+- Matching GLM catalog rows advertise only `max` and use it as their default. This
+  keeps Codex-side validation aligned with the runtime rewrite instead of exposing
+  lower controls that OpenCodex will ignore.
+- The Anthropic adapter's existing `max` mapping remains the wire contract. With the
+  current 32,000-token output ceiling it emits the highest usable 27,904-token
+  thinking budget and reserves 4,096 tokens for visible output. No Z.AI-specific
+  protocol field is invented, and generated catalog/cache files remain owned by
+  `ocx sync`.
 
 ## Real Z.AI Validation Track
 

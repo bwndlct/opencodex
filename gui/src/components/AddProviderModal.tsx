@@ -415,6 +415,19 @@ export default function AddProviderModal({
                     {["openai-responses", "openai-chat", "anthropic", "google", "azure-openai", "cursor"].map(a => <option key={a} value={a}>{a}</option>)}
                   </select>
                 </Field>
+                {isCustom && <Field label={t("pws.authMode")}>
+                  <select className="input" value={form.authMode} onChange={e => {
+                    const mode = e.target.value;
+                    if (mode === "key" || mode === "passthrough" || mode === "oauth" || mode === "local") {
+                      setForm({ ...form, authMode: mode });
+                    }
+                  }}>
+                    <option value="key">{t("modal.badge.apiKey")}</option>
+                    <option value="passthrough">{t("pws.passthrough")}</option>
+                    <option value="oauth">{t("modal.badge.oauth")}</option>
+                    <option value="local">{t("modal.badge.local")}</option>
+                  </select>
+                </Field>}
                 {preset.baseUrlChoices && preset.baseUrlChoices.length > 0 ? (
                   <>
                     <Field label={t("modal.endpoint")}>
@@ -463,7 +476,7 @@ export default function AddProviderModal({
                   </label>
                 )}
               </>}
-              {form.authMode === "forward" ? (
+              {form.authMode === "forward" || form.authMode === "passthrough" ? (
                 <div className="text-label" style={{ color: "var(--green)", background: "var(--green-soft)", border: "1px solid var(--green)", borderRadius: "var(--radius-sm)", padding: "8px 10px" }}>
                   {presetDescription(preset)}
                 </div>

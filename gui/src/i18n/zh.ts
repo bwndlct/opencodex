@@ -998,6 +998,7 @@ export const zh: Record<TKey, string> = {
   "sessions.policy.aria": "Session 路由策略",
   "sessions.policy.inherit": "全局",
   "sessions.policy.personalFirst": "个人",
+  "sessions.policy.companyFirst": "公司",
   "sessions.policy.updateError": "策略更新失败。",
   "sessions.fallback.personalUnavailable": "个人账号当前不可用",
 };

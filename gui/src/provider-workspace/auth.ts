@@ -18,7 +18,7 @@ export function providerAuthSurface(item: WorkspaceItem): ProviderAuthSurface {
   if (isAccountProvider(item.name, item)) return "codex-accounts";
 
   const mode = (item.authMode ?? "").toLowerCase();
-  if (mode === "forward" || mode === "local" || isLocalProvider(item)) return null;
+  if (mode === "forward" || mode === "passthrough" || mode === "local" || isLocalProvider(item)) return null;
   if (mode === "oauth") return "oauth-accounts";
 
   const hasKeyMaterial = item.hasApiKey === true;

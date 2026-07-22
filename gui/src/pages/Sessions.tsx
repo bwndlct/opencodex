@@ -70,7 +70,7 @@ function PolicyControl({
   return (
     <div className="session-policy-cell">
       <div className="usage-segmented session-policy-control" role="group" aria-label={t("sessions.policy.aria")}>
-        {(["inherit", "personal_first"] as const).map(policy => (
+        {(["inherit", "personal_first", "company_first"] as const).map(policy => (
           <button
             key={policy}
             type="button"
@@ -79,7 +79,11 @@ function PolicyControl({
             disabled={state.pending}
             onClick={() => onChange(rootSessionId, policy)}
           >
-            {t(policy === "inherit" ? "sessions.policy.inherit" : "sessions.policy.personalFirst")}
+            {t(policy === "inherit"
+              ? "sessions.policy.inherit"
+              : policy === "personal_first"
+                ? "sessions.policy.personalFirst"
+                : "sessions.policy.companyFirst")}
           </button>
         ))}
       </div>
@@ -188,7 +192,7 @@ export default function Sessions({ apiBase }: { apiBase: string }) {
       const body: unknown = await response.json();
       if (!body || typeof body !== "object" || !("routePolicy" in body)) return;
       const policy = body.routePolicy;
-      if (policy !== "inherit" && policy !== "personal_first") return;
+      if (policy !== "inherit" && policy !== "personal_first" && policy !== "company_first") return;
       updatePolicies(current => current[rootSessionId]
         ? current
         : { ...current, [rootSessionId]: { policy, pending: false, error: false } });

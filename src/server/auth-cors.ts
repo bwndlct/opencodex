@@ -244,6 +244,12 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
     if (isBuiltInChatGptForward) return null;
     return `provider ${name} uses reserved authMode "forward"; configure ChatGPT passthrough via the built-in provider`;
   }
+  if (typed.authMode === "passthrough" && typed.adapter !== "openai-responses") {
+    return `provider ${name} authMode "passthrough" requires the openai-responses adapter`;
+  }
+  if (typed.authMode === "passthrough" && (typed.apiKey || typed.apiKeyPool?.length)) {
+    return `provider ${name} authMode "passthrough" must not store API keys`;
+  }
   return null;
 }
 

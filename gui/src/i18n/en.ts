@@ -1001,6 +1001,7 @@ export const en = {
   "sessions.policy.aria": "Session route policy",
   "sessions.policy.inherit": "Global",
   "sessions.policy.personalFirst": "Personal",
+  "sessions.policy.companyFirst": "Company",
   "sessions.policy.updateError": "Policy update failed.",
   "sessions.fallback.personalUnavailable": "Personal accounts unavailable",
 } as const;

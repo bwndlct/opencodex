@@ -201,6 +201,7 @@ export default function ProviderSettings({
           <select className="input" value={authMode} onChange={e => setAuthMode(e.target.value)}>
             <option value="key">{t("modal.badge.apiKey")}</option>
             <option value="forward">{t("pws.auth.chatgptPassthrough")}</option>
+            <option value="passthrough">{t("pws.passthrough")}</option>
             <option value="oauth">{t("modal.badge.oauth")}</option>
             <option value="local">{t("modal.badge.local")}</option>
           </select>

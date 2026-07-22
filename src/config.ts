@@ -6,6 +6,7 @@ import * as z from "zod/v4";
 import { comboConfigIssues } from "./combos/types";
 import { hardenSecretDir, hardenSecretPath } from "./lib/windows-secret-acl";
 import { providerDestinationConfigError } from "./lib/destination-policy";
+import { isCanonicalOpenAiForwardProvider } from "./providers/openai-tiers";
 import type { OcxConfig } from "./types";
 
 let _atomicSeq = 0;
@@ -364,6 +365,13 @@ const configSchema = z.object({
   openaiProviderTierVersion: z.union([z.literal(1), z.literal(2)]).optional(),
   providerContextCaps: z.record(z.string(), z.number().int().positive()).optional(),
   contextCapValue: z.number().int().positive().optional(),
+  lunaReasoningMaxModels: z.array(z.string().trim().min(1).max(256)).max(32).optional(),
+  glmReasoningMaxModels: z.array(z.string().trim().min(1).max(256)).max(32).optional(),
+  openAiDualUpstream: z.object({
+    companyProvider: z.string().min(1),
+    defaultPolicy: z.enum(["personal_first", "company_first"]).optional(),
+    autoSwitchToCompany: z.boolean().optional(),
+  }).optional(),
 }).passthrough().superRefine((config, ctx) => {
   for (const name of Object.keys(config.providers)) {
     if (!isValidProviderName(name)) {
@@ -406,6 +414,17 @@ const configSchema = z.object({
         message: headersError,
       });
     }
+    const passthroughStoresKey = provider.authMode === "passthrough" && (
+      (typeof provider.apiKey === "string" && provider.apiKey.length > 0)
+      || (Array.isArray(provider.apiKeyPool) && provider.apiKeyPool.length > 0)
+    );
+    if (passthroughStoresKey) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", name, "authMode"],
+        message: "passthrough providers must not store API keys",
+      });
+    }
     const maxInputError = positiveIntegerRecordConfigError(
       (provider as { modelMaxInputTokens?: unknown }).modelMaxInputTokens,
       "modelMaxInputTokens",
@@ -440,6 +459,31 @@ const configSchema = z.object({
       path: ["defaultProvider"],
       message: "defaultProvider must exist in providers",
     });
+  }
+  const dual = config.openAiDualUpstream;
+  if (dual) {
+    const company = config.providers[dual.companyProvider];
+    if (dual.companyProvider === "openai" || !company) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["openAiDualUpstream", "companyProvider"],
+        message: "companyProvider must reference a configured provider other than openai",
+      });
+    } else if (company.adapter !== "openai-responses" || company.authMode !== "passthrough") {
+      ctx.addIssue({
+        code: "custom",
+        path: ["openAiDualUpstream", "companyProvider"],
+        message: "companyProvider must use the openai-responses adapter with authMode passthrough",
+      });
+    }
+    const personal = config.providers.openai;
+    if (!personal || !isCanonicalOpenAiForwardProvider(personal)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["openAiDualUpstream"],
+        message: "dual upstream requires the canonical openai forward provider",
+      });
+    }
   }
   const combos = (config as { combos?: unknown }).combos;
   if (combos !== undefined) {

@@ -331,7 +331,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const keyCardProviders = useMemo(
     () => config
       ? Object.entries(config.providers)
-          .filter(([, p]) => p.hasApiKey && p.authMode !== "oauth" && p.authMode !== "forward")
+          .filter(([, p]) => p.hasApiKey && p.authMode !== "oauth" && p.authMode !== "forward" && p.authMode !== "passthrough")
           .map(([n]) => n)
       : [],
     [config],
@@ -636,7 +636,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
 
   // API-key providers shown alongside OAuth logins in the account panel.
   const keyProviders = Object.entries(config.providers)
-    .filter(([name, prov]) => (prov.hasApiKey || name === "openai-apikey") && prov.authMode !== "oauth" && prov.authMode !== "forward" && !oauthProviders.includes(name))
+    .filter(([name, prov]) => (prov.hasApiKey || name === "openai-apikey") && prov.authMode !== "oauth" && prov.authMode !== "forward" && prov.authMode !== "passthrough" && !oauthProviders.includes(name))
     .map(([name]) => name);
 
   if (workspaceView) {
@@ -865,7 +865,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             const quota = quotaReports[name]?.quota ?? null;
             const icon = providerIconSrc(name);
             const accountSet = prov.authMode === "oauth" ? accountSets[name] : undefined;
-            const isKeyAuth = prov.authMode !== "oauth" && prov.authMode !== "forward";
+            const isKeyAuth = prov.authMode !== "oauth" && prov.authMode !== "forward" && prov.authMode !== "passthrough";
             const keyPool = isKeyAuth && prov.hasApiKey ? (keyPools[name] ?? []) : [];
             const showAccounts = (!!accountSet && accountSet.accounts.length > 0) || keyPool.length > 0;
             const accountsOpen = openAccounts[name] === true;
@@ -893,6 +893,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
                         {openAiMode === "pool" && <span className="badge badge-accent">{t("prov.openaiModePool")}</span>}
                         {name === "openai-apikey" && <span className="badge badge-muted">{t("modal.badge.apiKey")}</span>}
                         {name !== "openai" && prov.authMode === "forward" && !prov.codexAccountMode && <span className="badge badge-amber">passthrough</span>}
+                        {prov.authMode === "passthrough" && <span className="badge badge-amber">passthrough</span>}
                         {prov.keyOptional && <span className="badge badge-green">{t("modal.badge.free")}</span>}
                       </div>
                       <div className="muted prov-meta text-control">

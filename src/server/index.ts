@@ -9,10 +9,12 @@ import {
   type WsData,
 } from "./ws-bridge";
 import type { Server, ServerWebSocket } from "bun";
+import type { OcxConfig } from "../types";
 import {
   DEFAULT_SUBAGENT_MODELS,
   applyProxyEnv,
   loadConfig,
+  readConfigDiagnostics,
   saveConfig,
   websocketsEnabled,
 } from "../config";
@@ -124,6 +126,7 @@ import { beginRequestActivity, endRequestActivity, updateRequestActivityRoute } 
 
 const MAX_WS_FRAME_BYTES = 50 * 1024 * 1024;
 const WEBSOCKET_IDLE_TIMEOUT_SECONDS = 0;
+const serverConfigReloaders = new WeakMap<object, () => OcxConfig>();
 
 // GUI static serving extracted to ./server/gui-static. Re-exported below to keep the
 // "../src/server" import surface stable for tests/callers.
@@ -144,9 +147,11 @@ const WEBSOCKET_IDLE_TIMEOUT_SECONDS = 0;
 // trackSseForRequestLog(
 // export function relaySseWithHeartbeat
 
-export function startServer(port?: number) {
-  const config = runOpenAiTierStartupMigration(loadConfig());
-  applyProxyEnv(config);
+function prepareServerConfig(applyEnvironment: boolean, strict: boolean): OcxConfig {
+  const loaded = strict ? readConfigDiagnostics() : { config: loadConfig(), error: null };
+  if (loaded.error) throw new Error(`invalid configuration: ${loaded.error}`);
+  const config = runOpenAiTierStartupMigration(loaded.config);
+  if (applyEnvironment) applyProxyEnv(config);
   assertServerAuthConfig(config);
   // Refresh OAuth provider presets (models/noReasoningModels) from the registry so a proxy update
   // adding/dropping models reaches existing configs on start — not just fresh installs.
@@ -176,21 +181,33 @@ export function startServer(port?: number) {
     }
   }
   invalidateCodexModelsCache();
+  return config;
+}
 
-  const listenPort = port ?? config.port ?? 10100;
+export function reloadServerConfig(server: object): OcxConfig {
+  const reload = serverConfigReloaders.get(server);
+  if (!reload) throw new Error("server does not support config reload");
+  return reload();
+}
+
+export function startServer(port?: number) {
+  let currentConfig = prepareServerConfig(true, false);
+
+  const listenPort = port ?? currentConfig.port ?? 10100;
   setCorsOrigin(listenPort);
 
   // Canonicalize an explicit "localhost" bind to IPv4 so it matches the injected base_url (which
   // resolves localhost→127.0.0.1): on Windows `localhost` resolves ::1-first, but the injected URL
   // is 127.0.0.1, so binding literal "localhost" would reintroduce the F4 refusal. Wildcards
   // (0.0.0.0/::) and specific hosts are left untouched so intentional exposure is preserved.
-  const bindHost = /^localhost$/i.test(config.hostname ?? "") ? "127.0.0.1" : (config.hostname ?? "127.0.0.1");
+  const bindHost = /^localhost$/i.test(currentConfig.hostname ?? "") ? "127.0.0.1" : (currentConfig.hostname ?? "127.0.0.1");
 
   const server: Server<WsData> = Bun.serve<WsData>({
     port: listenPort,
     hostname: bindHost,
     idleTimeout: 255,
     async fetch(req, requestServer): Promise<Response> {
+      const config = currentConfig;
       const url = new URL(req.url);
       markActivity(`${req.method} ${url.pathname}`);
 
@@ -497,6 +514,7 @@ export function startServer(port?: number) {
         registerCodexWebSocket(ws);
       },
       message(ws: ServerWebSocket<WsData>, raw: string | Buffer) {
+        const config = currentConfig;
         const rawBytes = typeof raw === "string" ? Buffer.byteLength(raw) : raw.byteLength;
         if (rawBytes > MAX_WS_FRAME_BYTES) {
           sendJsonFrame(ws, buildWsErrorFrame(413, {
@@ -630,6 +648,21 @@ export function startServer(port?: number) {
     },
   });
 
+  serverConfigReloaders.set(server, () => {
+    const next = prepareServerConfig(false, true);
+    const currentHostname = currentConfig.hostname ?? "127.0.0.1";
+    const nextHostname = next.hostname ?? "127.0.0.1";
+    if (nextHostname !== currentHostname || next.port !== currentConfig.port) {
+      throw new Error("hostname or port changed; restart required");
+    }
+    if (next.proxy !== currentConfig.proxy) {
+      throw new Error("proxy changed; restart required");
+    }
+    currentConfig = next;
+    invalidateCodexModelsCache();
+    return next;
+  });
+
   setServerRef(server);
   const actualPort = server.port ?? listenPort;
   setCorsOrigin(actualPort);
@@ -644,7 +677,7 @@ export function startServer(port?: number) {
   // usage scores from the first routing decision, even when the dashboard is
   // never opened (the common CLI/WSL case). Fire-and-forget: never blocks the
   // listener, and a blocked network silently no-ops (see Phase 30 diagnostics).
-  const openAiProvider = config.providers.openai;
+  const openAiProvider = currentConfig.providers.openai;
   if (
     openAiProvider
     && openAiProvider.disabled !== true
@@ -652,7 +685,7 @@ export function startServer(port?: number) {
     && providerCodexAccountMode("openai", openAiProvider) === "pool"
   ) {
     import("../codex/auth-api")
-      .then(({ primeCodexPoolQuotas }) => primeCodexPoolQuotas(config, "startup"))
+      .then(({ primeCodexPoolQuotas }) => primeCodexPoolQuotas(currentConfig, "startup"))
       .catch(() => {});
   }
 

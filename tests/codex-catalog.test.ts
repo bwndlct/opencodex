@@ -671,6 +671,60 @@ describe("Codex catalog routed normalization", () => {
     }
   });
 
+  test("forced Z.AI GLM rows advertise only max reasoning and default to max", async () => {
+    const models = await gatherRoutedModels({
+      port: 10100,
+      defaultProvider: "zai-anthropic",
+      providers: {
+        "zai-anthropic": {
+          adapter: "anthropic",
+          baseUrl: "https://api.z.ai/api/anthropic",
+          authMode: "key",
+          apiKey: "test-key",
+          liveModels: false,
+          models: ["glm-5.2"],
+          modelReasoningEfforts: { "glm-5.2": ["low", "medium", "high", "xhigh", "max"] },
+        },
+      },
+    });
+    const model = models.find(item => `${item.provider}/${item.id}` === "zai-anthropic/glm-5.2");
+    expect(model).toMatchObject({
+      reasoningEfforts: ["max"],
+      defaultReasoningEffort: "max",
+      preserveExactReasoningEfforts: true,
+    });
+
+    const entry = buildCatalogEntries(nativeTemplate(), [], models)
+      .find(item => item.slug === "zai-anthropic/glm-5.2");
+    expect(entry?.supported_reasoning_levels).toEqual([
+      { effort: "max", description: expect.any(String) },
+    ]);
+    expect(entry?.default_reasoning_level).toBe("max");
+  });
+
+  test("an empty GLM force list disables the catalog override", async () => {
+    const models = await gatherRoutedModels({
+      port: 10100,
+      defaultProvider: "zai-anthropic",
+      glmReasoningMaxModels: [],
+      providers: {
+        "zai-anthropic": {
+          adapter: "anthropic",
+          baseUrl: "https://api.z.ai/api/anthropic",
+          authMode: "key",
+          apiKey: "test-key",
+          liveModels: false,
+          models: ["glm-5.2"],
+          modelReasoningEfforts: { "glm-5.2": ["high", "max"] },
+        },
+      },
+    });
+    const model = models.find(item => `${item.provider}/${item.id}` === "zai-anthropic/glm-5.2");
+
+    expect(model?.reasoningEfforts).toEqual(["high", "max"]);
+    expect(model?.preserveExactReasoningEfforts).toBeUndefined();
+  });
+
   test("configured alias with a dated live variant is retained (Anthropic haiku pattern)", async () => {
     clearModelCache("dated-provider");
     const originalFetch = globalThis.fetch;

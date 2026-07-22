@@ -508,7 +508,7 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
         return jsonResponse({ error: "routePolicy is required" }, 400);
       }
       if (!isSessionRoutePolicy(body.routePolicy)) {
-        return jsonResponse({ error: "routePolicy must be inherit or personal_first" }, 400);
+        return jsonResponse({ error: "routePolicy must be inherit, personal_first, or company_first" }, 400);
       }
       if (!isObservedRootSession(rootSessionId)) {
         return jsonResponse({ error: "session_not_found" }, 404);
@@ -646,6 +646,7 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     return jsonResponse(Object.entries(config.providers).map(([name, p]) => ({
       name, adapter: p.adapter, baseUrl: publicProviderBaseUrl(p.baseUrl), defaultModel: p.defaultModel,
       hasApiKey: !!p.apiKey,
+      authMode: p.authMode,
       allowPrivateNetwork: p.allowPrivateNetwork === true,
       disabled: p.disabled === true,
       codexAccountMode: providerCodexAccountMode(name, p),
@@ -770,14 +771,14 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     if (Object.hasOwn(rawBody, "authMode")) {
       if (typeof rawBody.authMode !== "string") return jsonResponse({ error: "authMode must be a string" }, 400);
       const mode = rawBody.authMode.trim();
-      if (mode === "key" || mode === "forward" || mode === "oauth" || mode === "local") {
+      if (mode === "key" || mode === "forward" || mode === "passthrough" || mode === "oauth" || mode === "local") {
         next.authMode = mode;
         touched = true;
       } else if (mode === "") {
         delete next.authMode;
         touched = true;
       } else {
-        return jsonResponse({ error: "authMode must be key, forward, oauth, or local" }, 400);
+        return jsonResponse({ error: "authMode must be key, forward, passthrough, oauth, or local" }, 400);
       }
     }
    if (Object.hasOwn(rawBody, "note")) {
@@ -836,11 +837,13 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     if (prov.disabled) {
       return jsonResponse({ ok: false, error: "Provider is disabled", latencyMs: 0 });
     }
-    if (prov.authMode === "forward") {
+    if (prov.authMode === "forward" || prov.authMode === "passthrough") {
       return jsonResponse({
         ok: true,
         latencyMs: 0,
-        message: "Passthrough provider is configured (forwards your Codex login; no upstream /models).",
+        message: prov.authMode === "forward"
+          ? "Passthrough provider is configured (forwards your Codex login; no upstream /models)."
+          : "Company passthrough provider is configured (forwards caller credentials; no upstream /models probe).",
       });
     }
     if (prov.liveModels === false) {

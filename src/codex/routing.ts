@@ -211,16 +211,20 @@ function bindThreadAffinity(threadId: string, accountId: string, now: number): v
   pruneLruThreadAffinities();
 }
 
-function getEligiblePoolAccounts(config: OcxConfig, excludeId?: string, now = Date.now()): string[] {
+function accountIsExcluded(accountId: string, excluded?: string | ReadonlySet<string>): boolean {
+  return typeof excluded === "string" ? accountId === excluded : excluded?.has(accountId) === true;
+}
+
+function getEligiblePoolAccounts(config: OcxConfig, excluded?: string | ReadonlySet<string>, now = Date.now()): string[] {
   const ids = (config.codexAccounts ?? [])
-    .filter(account => !account.isMain && account.id !== excludeId && !isAccountNeedsReauth(account.id))
+    .filter(account => !account.isMain && !accountIsExcluded(account.id, excluded) && !isAccountNeedsReauth(account.id))
     .filter(account => !isCodexAccountInCooldown(account.id, now))
     .filter(account => isCodexAccountUsable(config, account.id))
     .map(account => account.id);
   // The main Codex account is not stored in config.codexAccounts; include it as a
   // first-class rotation candidate when its read-only token is usable (Option A).
   if (
-    excludeId !== MAIN_CODEX_ACCOUNT_ID
+    !accountIsExcluded(MAIN_CODEX_ACCOUNT_ID, excluded)
     && !isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)
     && !isCodexAccountInCooldown(MAIN_CODEX_ACCOUNT_ID, now)
     && isCodexAccountUsable(config, MAIN_CODEX_ACCOUNT_ID)
@@ -259,6 +263,29 @@ export function pickLowestUsageCodexAccount(config: OcxConfig, excludeId?: strin
     }
   }
   return best;
+}
+
+export function resolveAlternateCodexAccountForThread(
+  threadId: string | null,
+  config: OcxConfig,
+  excludedAccountIds: ReadonlySet<string>,
+  now = Date.now(),
+): CodexThreadResolution {
+  const accountId = (() => {
+    let best: string | null = null;
+    let bestUsage = Number.POSITIVE_INFINITY;
+    for (const id of getEligiblePoolAccounts(config, excludedAccountIds, now)) {
+      const usage = computeCodexUsageScore(getAccountQuota(id), getPoolAccountPlan(config, id));
+      if (usage < bestUsage) {
+        best = id;
+        bestUsage = usage;
+      }
+    }
+    return best;
+  })();
+  if (!accountId) return { status: "none" };
+  if (threadId) bindThreadAffinity(threadId, accountId, now);
+  return { status: "selected", accountId };
 }
 
 function setActiveCodexAccount(config: OcxConfig, accountId: string): void {

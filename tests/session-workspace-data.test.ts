@@ -50,6 +50,36 @@ describe("session workspace data", () => {
     });
   });
 
+  test("parses company-first route telemetry values", () => {
+    expect(parseActiveSessionSnapshot({
+      generatedAt: 200,
+      activeRequests: 1,
+      unattributedActiveRequests: 0,
+      sessions: [{
+        rootSessionId: "company-root",
+        activeRequests: 1,
+        executionSessionIds: ["company-execution"],
+        oldestStartedAt: 180,
+        routePolicy: "company_first",
+        effectiveUpstream: "company",
+        fallbackReason: "company_upstream_unavailable",
+      }],
+    })).toEqual({
+      generatedAt: 200,
+      activeRequests: 1,
+      unattributedActiveRequests: 0,
+      sessions: [{
+        rootSessionId: "company-root",
+        activeRequests: 1,
+        executionSessionIds: ["company-execution"],
+        oldestStartedAt: 180,
+        routePolicy: "company_first",
+        effectiveUpstream: "company",
+        fallbackReason: "company_upstream_unavailable",
+      }],
+    });
+  });
+
   test("rejects malformed active snapshot top-level and required rows", () => {
     expect(() => parseActiveSessionSnapshot(null)).toThrow(Error);
     expect(() => parseActiveSessionSnapshot({

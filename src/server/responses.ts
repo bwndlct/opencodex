@@ -85,6 +85,8 @@ import type { AttemptRecoveryKind } from "../usage/log";
 import { requestIdentityFrom, type RequestIdentity } from "./request-identity";
 import type { RequestRouteObservation } from "./request-activity";
 import { getSessionRoutePolicy, type SessionRoutePolicy } from "./session-route-policy";
+import { isBareOpenAiModel, runOpenAiDualUpstream } from "./openai-dual-upstream";
+import { forceConfiguredReasoningMax } from "./max-reasoning-policy";
 import {
   consumeForInspection,
   consumeForResponseLogMetadata,
@@ -427,6 +429,7 @@ export async function resolveRequestCodexAuth(
   config: OcxConfig,
   configuredMode: CodexAccountMode,
   rootSessionId?: string,
+  excludedAccountIds?: ReadonlySet<string>,
 ): Promise<RequestCodexAuthSelection> {
   const routePolicy = getSessionRoutePolicy(rootSessionId);
   const personalFirstOverride = routePolicy === "personal_first" && configuredMode === "direct";
@@ -434,7 +437,7 @@ export async function resolveRequestCodexAuth(
   if (initialMode === "direct") validateForwardAdmissionCredential(headers, config);
 
   try {
-    const context = await resolveCodexAuthContext(headers, config, initialMode, { rootSessionId });
+    const context = await resolveCodexAuthContext(headers, config, initialMode, { rootSessionId, excludedAccountIds });
     if (isCodexAuthContextUsable(context, config) || !personalFirstOverride) {
       return { context, mode: initialMode, routePolicy, usedConfiguredFallback: false };
     }
@@ -443,7 +446,7 @@ export async function resolveRequestCodexAuth(
   }
 
   validateForwardAdmissionCredential(headers, config);
-  const context = await resolveCodexAuthContext(headers, config, configuredMode, { rootSessionId });
+  const context = await resolveCodexAuthContext(headers, config, configuredMode, { rootSessionId, excludedAccountIds });
   return { context, mode: configuredMode, routePolicy, usedConfiguredFallback: true };
 }
 
@@ -510,14 +513,26 @@ interface HandleResponsesOptions {
   /** One-shot TTFT callback: first non-empty model output observed (WP4). */
   onFirstOutput?: () => void;
   onCodexAuthContextResolved?: (context: CodexAuthContext | undefined) => void;
+  /** Internal account identity used only to continue same-request pool failover. */
+  onCodexAccountAttempted?: (accountId: string) => void;
   recordTerminalOutcomes?: boolean;
   setTerminalOutcomeRecorder?: (recorder: ((status: ResponsesTerminalStatus) => void) | undefined) => void;
   onNativePassthroughTerminal?: (status: ResponsesTerminalStatus) => void;
   onNativePassthroughCancel?: () => void;
   /** Internal recursion guard; callers outside this module must not set it. */
   comboAttempt?: boolean;
+  /** Internal recursion guard and account-selection controls for OpenAI dual upstream. */
+  dualUpstreamAttempt?: boolean;
+  codexAccountModeOverride?: CodexAccountMode;
+  excludedCodexAccountIds?: ReadonlySet<string>;
   /** 030-owned handoff when a child consumed the original failure under bounds. */
   onConsumedComboFailure?: (failure: ConsumedComboFailure) => void;
+}
+
+function requestBodyWithProvider(rawBody: unknown, providerName: string): unknown {
+  if (!rawBody || typeof rawBody !== "object" || Array.isArray(rawBody)) return rawBody;
+  const model = (rawBody as { model?: unknown }).model;
+  return typeof model === "string" ? { ...rawBody, model: `${providerName}/${model}` } : rawBody;
 }
 
 function explicitRequestedProvider(modelId: string): string | undefined {
@@ -610,6 +625,129 @@ function createChildPassthroughCallbackGate(options: HandleResponsesOptions) {
       pending = undefined;
     },
   };
+}
+
+function createDeferredSignal(callback: (() => void) | undefined) {
+  let state: "pending" | "committed" | "discarded" = "pending";
+  let received = false;
+  return {
+    receive: () => {
+      if (state === "discarded" || received) return;
+      received = true;
+      if (state === "committed") callback?.();
+    },
+    commit: () => {
+      if (state !== "pending") return;
+      state = "committed";
+      if (received) callback?.();
+    },
+    discard: () => { state = "discarded"; },
+  };
+}
+
+async function handleOpenAiDualResponses(
+  req: Request,
+  rawBody: unknown,
+  requestedModel: string,
+  config: OcxConfig,
+  logCtx: RequestLogContext,
+  identity: RequestIdentity,
+  options: HandleResponsesOptions,
+): Promise<Response> {
+  const sessionPolicy = getSessionRoutePolicy(identity.rootSessionId);
+  let selectedRoute: RequestRouteObservation | undefined;
+  const result = await runOpenAiDualUpstream(config, sessionPolicy, async spec => {
+    const childBody = requestBodyWithProvider(rawBody, spec.providerName);
+    const childHeaders = new Headers(req.headers);
+    childHeaders.delete("content-length");
+    const childRequest = new Request(req.url, {
+      method: req.method,
+      headers: childHeaders,
+      body: JSON.stringify(childBody),
+    });
+    const childLog: RequestLogContext = {
+      model: requestedModel,
+      provider: spec.providerName,
+    };
+    const started = Date.now();
+    const attempt = beginRequestAttempt(
+      (logCtx.attempts?.length ?? 0) + 1,
+      spec.providerName,
+      requestedModel,
+      config.providers[spec.providerName]!.adapter,
+    );
+    childLog.activeAttempt = attempt;
+    let resolvedAuth: CodexAuthContext | undefined;
+    let attemptedAccountId: string | undefined;
+    let terminalRecorder: ((status: ResponsesTerminalStatus) => void) | undefined;
+    let routeObservation: RequestRouteObservation | undefined;
+    let responseStatus = 500;
+    let retained = false;
+    const callbackGate = createChildPassthroughCallbackGate(options);
+    const firstOutputGate = createDeferredSignal(options.onFirstOutput);
+    const response = await handleResponses(childRequest, config, childLog, {
+      ...options,
+      dualUpstreamAttempt: true,
+      identityOverride: identity,
+      codexAccountModeOverride: spec.upstream === "personal" ? "pool" : undefined,
+      excludedCodexAccountIds: spec.excludedAccountIds,
+      onRequestIdentityResolved: undefined,
+      onRequestRouteResolved: value => { routeObservation = value; },
+      onCodexAuthContextResolved: value => { resolvedAuth = value; },
+      onCodexAccountAttempted: value => { attemptedAccountId = value; },
+      setTerminalOutcomeRecorder: value => { terminalRecorder = value; },
+      onNativePassthroughTerminal: callbackGate.onTerminal,
+      onNativePassthroughCancel: callbackGate.onCancel,
+      onFirstOutput: firstOutputGate.receive,
+    });
+    responseStatus = response.status;
+
+    const retainAttempt = (selected: boolean): void => {
+      if (retained) return;
+      sealRequestAttemptIdentity(attempt, childLog.provider, childLog.providerAdapter ?? attempt.adapter);
+      if (!selected) finishRequestAttempt(attempt, responseStatus, Date.now() - started, childLog.usage);
+      (logCtx.attempts ??= []).push(attempt);
+      retained = true;
+    };
+
+    return {
+      response,
+      ...(resolvedAuth ? { authContext: resolvedAuth } : {}),
+      ...(attemptedAccountId ? { personalAccountId: attemptedAccountId } : {}),
+      commit: () => {
+        retainAttempt(true);
+        Object.assign(logCtx, childLog, {
+          requestedModel,
+          attempts: logCtx.attempts,
+          activeAttempt: attempt,
+          activeAttemptStartedAt: started,
+        });
+        selectedRoute = routeObservation;
+        options.onCodexAuthContextResolved?.(resolvedAuth);
+        options.setTerminalOutcomeRecorder?.(terminalRecorder);
+        callbackGate.commit();
+        firstOutputGate.commit();
+      },
+      discard: statusOverride => {
+        if (statusOverride !== undefined) responseStatus = statusOverride;
+        retainAttempt(false);
+        callbackGate.discard();
+        firstOutputGate.discard();
+      },
+    };
+  });
+
+  const companyProvider = config.openAiDualUpstream?.companyProvider;
+  if (!companyProvider) throw new Error("OpenAI dual-upstream routing is not configured");
+  options.onRequestRouteResolved?.({
+    routePolicy: sessionPolicy,
+    requestedModel,
+    effectiveProvider: result.upstream === "personal" ? "openai" : companyProvider,
+    effectiveModel: selectedRoute?.effectiveModel ?? requestedModel,
+    effectiveUpstream: result.upstream === "personal" ? "codex_pool" : "company",
+    ...(result.fallbackReason ? { fallbackReason: result.fallbackReason } : {}),
+  });
+  return result.response;
 }
 
 async function handleComboResponses(
@@ -810,6 +948,12 @@ export async function handleResponses(
   const identity = options.identityOverride ?? requestIdentityFrom(req.headers, body);
   Object.assign(logCtx, identity);
   options.onRequestIdentityResolved?.(identity);
+  const requestedModel = body && typeof body === "object" && !Array.isArray(body)
+    ? (body as { model?: unknown }).model
+    : undefined;
+  if (!options.dualUpstreamAttempt && config.openAiDualUpstream && isBareOpenAiModel(requestedModel)) {
+    return handleOpenAiDualResponses(req, body, requestedModel, config, logCtx, identity, options);
+  }
   const comboId = !options.comboAttempt ? comboIdFromRawBody(body) : null;
   if (comboId && Object.hasOwn(config.combos ?? {}, comboId)) {
     return handleComboResponses(req, body, comboId, config, logCtx, {
@@ -851,6 +995,20 @@ export async function handleResponses(
   logCtx.requestedSpeedLabel = requestLogSpeedLabel(parsed.options.serviceTier);
   logCtx.configuredServiceTier = readConfiguredCodexServiceTier();
   logCtx.configuredSpeedLabel = requestLogSpeedLabel(logCtx.configuredServiceTier);
+
+  const maxReasoningRewrite = forceConfiguredReasoningMax(
+    parsed,
+    originalRequestedModelId,
+    identity.requestKind,
+    identity.requestedEffort,
+    config,
+  );
+  if (maxReasoningRewrite) {
+    logCtx.requestedEffort = `${maxReasoningRewrite.from ?? "unset"}->max`;
+    if (isInjectionDebugEnabled()) {
+      injectionDebugLog(`[opencodex] ${originalRequestedModelId}: ${maxReasoningRewrite.policy} reasoning effort forced to max`);
+    }
+  }
 
   // Shadow call intercept: rewrite Codex Desktop's hard-coded gpt-5.4-mini helper calls
   const _sci = config.shadowCallIntercept;
@@ -976,19 +1134,24 @@ export async function handleResponses(
   );
 
   let authCtx: CodexAuthContext = { kind: "main", accountId: null };
-  let effectiveCodexAccountMode = route.codexAccountMode;
+  const requestedCodexAccountMode = options.codexAccountModeOverride ?? route.codexAccountMode;
+  let effectiveCodexAccountMode = requestedCodexAccountMode;
   let routePolicy = getSessionRoutePolicy(identity.rootSessionId);
   let usedConfiguredFallback = false;
   let selectedForwardHeaders: Headers;
   try {
-    if (route.codexAccountMode) {
+    if (requestedCodexAccountMode) {
       const selection = await resolveRequestCodexAuth(
         req.headers,
         config,
-        route.codexAccountMode,
+        requestedCodexAccountMode,
         identity.rootSessionId,
+        options.excludedCodexAccountIds,
       );
       authCtx = selection.context;
+      if (authCtx.kind === "pool" || authCtx.kind === "main-pool") {
+        options.onCodexAccountAttempted?.(authCtx.accountId);
+      }
       effectiveCodexAccountMode = selection.mode;
       routePolicy = selection.routePolicy;
       usedConfiguredFallback = selection.usedConfiguredFallback;
@@ -999,12 +1162,15 @@ export async function handleResponses(
     selectedForwardHeaders = headersForCodexAuthContext(req.headers, authCtx);
   } catch (err) {
     if (err instanceof CodexAccountCooldownError) {
+      options.onCodexAccountAttempted?.(err.accountId);
       return formatErrorResponse(429, "rate_limit_error", "Selected Codex account is cooling down");
     }
     if (err instanceof CodexThreadAffinityExpiredError) {
+      options.onCodexAccountAttempted?.(err.accountId);
       return formatErrorResponse(409, "invalid_request_error", "Codex thread account affinity expired; start a new session");
     }
     if (err instanceof CodexAuthContextError) {
+      options.onCodexAccountAttempted?.(err.accountId);
       const safeAccountLabel = formatCodexProviderForLog(route.providerName, err.accountId, config);
       console.error(`[codex-auth] Pool account ${safeAccountLabel} token failed; reauthentication required`);
       return formatErrorResponse(401, "authentication_error", "Selected Codex account needs reauthentication");
@@ -1739,10 +1905,78 @@ export async function bufferCompactResponse(upstream: Response, signal: AbortSig
   return new Response(body, { status: upstream.status, headers: { "Content-Type": contentType } });
 }
 
+interface HandleResponsesCompactOptions {
+  dualUpstreamAttempt?: boolean;
+  codexAccountModeOverride?: CodexAccountMode;
+  excludedCodexAccountIds?: ReadonlySet<string>;
+  identityOverride?: RequestIdentity;
+  onCodexAuthContextResolved?: (context: CodexAuthContext | undefined) => void;
+  onCodexAccountAttempted?: (accountId: string) => void;
+  onRequestRouteResolved?: (observation: RequestRouteObservation) => void;
+}
+
+async function handleOpenAiDualCompact(
+  req: Request,
+  rawBody: unknown,
+  requestedModel: string,
+  config: OcxConfig,
+  logCtx: RequestLogContext,
+  identity: RequestIdentity,
+  options: HandleResponsesCompactOptions,
+): Promise<Response> {
+  const sessionPolicy = getSessionRoutePolicy(identity.rootSessionId);
+  let selectedRoute: RequestRouteObservation | undefined;
+  const result = await runOpenAiDualUpstream(config, sessionPolicy, async spec => {
+    const childHeaders = new Headers(req.headers);
+    childHeaders.delete("content-length");
+    const childRequest = new Request(req.url, {
+      method: req.method,
+      headers: childHeaders,
+      body: JSON.stringify(requestBodyWithProvider(rawBody, spec.providerName)),
+    });
+    const childLog: RequestLogContext = { model: requestedModel, provider: spec.providerName };
+    let resolvedAuth: CodexAuthContext | undefined;
+    let attemptedAccountId: string | undefined;
+    let routeObservation: RequestRouteObservation | undefined;
+    const response = await handleResponsesCompact(childRequest, config, childLog, {
+      ...options,
+      dualUpstreamAttempt: true,
+      codexAccountModeOverride: spec.upstream === "personal" ? "pool" : undefined,
+      excludedCodexAccountIds: spec.excludedAccountIds,
+      identityOverride: identity,
+      onCodexAuthContextResolved: value => { resolvedAuth = value; },
+      onCodexAccountAttempted: value => { attemptedAccountId = value; },
+      onRequestRouteResolved: value => { routeObservation = value; },
+    });
+    return {
+      response,
+      ...(resolvedAuth ? { authContext: resolvedAuth } : {}),
+      ...(attemptedAccountId ? { personalAccountId: attemptedAccountId } : {}),
+      commit: () => {
+        Object.assign(logCtx, childLog, { requestedModel });
+        selectedRoute = routeObservation;
+        options.onCodexAuthContextResolved?.(resolvedAuth);
+      },
+    };
+  });
+  const companyProvider = config.openAiDualUpstream?.companyProvider;
+  if (!companyProvider) throw new Error("OpenAI dual-upstream routing is not configured");
+  options.onRequestRouteResolved?.({
+    routePolicy: sessionPolicy,
+    requestedModel,
+    effectiveProvider: result.upstream === "personal" ? "openai" : companyProvider,
+    effectiveModel: selectedRoute?.effectiveModel ?? requestedModel,
+    effectiveUpstream: result.upstream === "personal" ? "codex_pool" : "company",
+    ...(result.fallbackReason ? { fallbackReason: result.fallbackReason } : {}),
+  });
+  return result.response;
+}
+
 export async function handleResponsesCompact(
   req: Request,
   config: OcxConfig,
   logCtx: RequestLogContext,
+  options: HandleResponsesCompactOptions = {},
 ): Promise<Response> {
   let body: unknown;
   try {
@@ -1753,11 +1987,14 @@ export async function handleResponsesCompact(
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     return formatErrorResponse(400, "invalid_request_error", "Invalid compaction request body");
   }
-  const identity = requestIdentityFrom(req.headers, body);
+  const identity = options.identityOverride ?? requestIdentityFrom(req.headers, body);
   Object.assign(logCtx, identity);
   const raw = body as { model?: unknown; input?: unknown };
   if (typeof raw.model !== "string" || raw.model.length === 0) {
     return formatErrorResponse(400, "invalid_request_error", "compaction request requires a model");
+  }
+  if (!options.dualUpstreamAttempt && config.openAiDualUpstream && isBareOpenAiModel(raw.model)) {
+    return handleOpenAiDualCompact(req, body, raw.model, config, logCtx, identity, options);
   }
 
   let route;
@@ -1788,14 +2025,20 @@ export async function handleResponsesCompact(
     let compactProvider = route.provider;
     const headers = new Headers({ "content-type": "application/json" });
     try {
-      if (route.codexAccountMode) {
+      const requestedCodexAccountMode = options.codexAccountModeOverride ?? route.codexAccountMode;
+      if (requestedCodexAccountMode) {
         const selection = await resolveRequestCodexAuth(
           req.headers,
           config,
-          route.codexAccountMode,
+          requestedCodexAccountMode,
           identity.rootSessionId,
+          options.excludedCodexAccountIds,
         );
         const authCtx = selection.context;
+        if (authCtx.kind === "pool" || authCtx.kind === "main-pool") {
+          options.onCodexAccountAttempted?.(authCtx.accountId);
+        }
+        options.onCodexAuthContextResolved?.(authCtx);
         const selected = headersForCodexAuthContext(req.headers, authCtx);
         compactProvider = applyCodexAuthContextToProvider(route.provider, authCtx, selection.mode);
         for (const name of FORWARD_HEADERS) {
@@ -1808,14 +2051,18 @@ export async function handleResponsesCompact(
           headers.set("chatgpt-account-id", override.chatgptAccountId);
         }
       }
+      if (!requestedCodexAccountMode) options.onCodexAuthContextResolved?.(undefined);
     } catch (err) {
       if (err instanceof CodexAccountCooldownError) {
+        options.onCodexAccountAttempted?.(err.accountId);
         return formatErrorResponse(429, "rate_limit_error", "Selected Codex account is cooling down");
       }
       if (err instanceof CodexThreadAffinityExpiredError) {
+        options.onCodexAccountAttempted?.(err.accountId);
         return formatErrorResponse(409, "invalid_request_error", "Codex thread account affinity expired; start a new session");
       }
       if (err instanceof CodexAuthContextError) {
+        options.onCodexAccountAttempted?.(err.accountId);
         return formatErrorResponse(401, "authentication_error", "Selected Codex account needs reauthentication");
       }
       if (err instanceof CodexPoolAuthenticationError || err instanceof CodexDirectAuthenticationError) {
@@ -1851,7 +2098,23 @@ export async function handleResponsesCompact(
       if (req.signal.aborted) return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
       return formatErrorResponse(502, "upstream_error", "Failed to connect to compact upstream");
     }
-    return bufferCompactResponse(upstream, req.signal);
+    const response = await bufferCompactResponse(upstream, req.signal);
+    options.onRequestRouteResolved?.({
+      routePolicy: getSessionRoutePolicy(identity.rootSessionId),
+      requestedModel: raw.model,
+      effectiveProvider: route.providerName,
+      effectiveModel: route.modelId,
+      effectiveUpstream: options.codexAccountModeOverride === "pool"
+        ? "codex_pool"
+        : passthrough
+          ? "company"
+          : route.codexAccountMode === "direct"
+            ? "codex_direct"
+            : route.codexAccountMode === "pool"
+              ? "codex_pool"
+              : "provider",
+    });
+    return response;
   }
 
   // ROUTED model: run the v2 synthetic-compaction turn internally (appends COMPACT_PROMPT, no

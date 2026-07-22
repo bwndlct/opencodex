@@ -998,6 +998,7 @@ export const ko: Record<TKey, string> = {
   "sessions.policy.aria": "세션 라우팅 정책",
   "sessions.policy.inherit": "글로벌",
   "sessions.policy.personalFirst": "개인",
+  "sessions.policy.companyFirst": "회사",
   "sessions.policy.updateError": "정책 업데이트에 실패했습니다.",
   "sessions.fallback.personalUnavailable": "개인 계정을 사용할 수 없음",
 };

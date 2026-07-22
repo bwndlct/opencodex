@@ -29,6 +29,7 @@ export function authModeLabel(item: WorkspaceItem, t: TFn): string {
   switch (item.authMode) {
     case "oauth": return t("modal.badge.oauth");
     case "forward": return t("pws.auth.chatgptPassthrough");
+    case "passthrough": return t("pws.passthrough");
     case "local": return t("modal.badge.local");
     case "key": return t("modal.badge.apiKey");
     default: return item.authMode ?? (item.keyOptional ? t("pws.auth.noKey") : t("modal.badge.apiKey"));

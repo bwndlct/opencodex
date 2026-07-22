@@ -116,7 +116,7 @@ export default function ProviderOverview({
           <div className="pws-auth-summary">
             <span className="pws-auth-dot" />
             <span>
-              {item.authMode === "forward"
+              {item.authMode === "forward" || item.authMode === "passthrough"
                 ? t("pws.passthrough")
                 : item.authMode === "oauth"
                   ? (oauthEmail ? t("pws.loggedInAs", { email: oauthEmail }) : t("pws.notLoggedIn"))

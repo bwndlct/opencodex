@@ -979,6 +979,7 @@ export const de = {
   "sessions.policy.aria": "Session-Routing-Richtlinie",
   "sessions.policy.inherit": "Global",
   "sessions.policy.personalFirst": "Persönlich",
+  "sessions.policy.companyFirst": "Unternehmen",
   "sessions.policy.updateError": "Richtlinie konnte nicht aktualisiert werden.",
   "sessions.fallback.personalUnavailable": "Persönliche Konten nicht verfügbar",
 } as const;

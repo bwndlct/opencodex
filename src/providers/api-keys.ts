@@ -36,7 +36,7 @@ function keyId(key: string): string {
 
 /** True for providers whose upstream auth is a configured API key (not oauth/forward). */
 export function isKeyAuthProvider(provider: OcxProviderConfig): boolean {
-  return provider.authMode !== "oauth" && provider.authMode !== "forward";
+  return provider.authMode !== "oauth" && provider.authMode !== "forward" && provider.authMode !== "passthrough";
 }
 
 /** Seed the pool from a legacy bare `apiKey`, and keep `apiKey` mirrored to the active entry. */

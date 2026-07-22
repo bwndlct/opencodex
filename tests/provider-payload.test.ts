@@ -1,3 +1,4 @@
+// Test goal: verify provider form payloads preserve supported auth modes and omit credentials unless key auth supplies one.
 import { describe, expect, test } from "bun:test";
 import {
   buildProviderPayload,
@@ -47,6 +48,24 @@ describe("provider dashboard payload", () => {
       adapter: "openai-responses",
       baseUrl: "https://example.test/v1",
     });
+  });
+
+  test("preserves passthrough mode without persisting an API key", () => {
+    const payload = buildProviderPayload({
+      name: "company",
+      adapter: "openai-responses",
+      baseUrl: " https://example.test/v1 ",
+      authMode: "passthrough",
+      apiKey: "must-not-leak",
+      defaultModel: "",
+    });
+
+    expect(payload).toEqual({
+      adapter: "openai-responses",
+      baseUrl: "https://example.test/v1",
+      authMode: "passthrough",
+    });
+    expect(payload).not.toHaveProperty("apiKey");
   });
 
   test("posts the immutable canonical OpenAI Pool seed under its reserved id", () => {

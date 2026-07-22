@@ -366,6 +366,18 @@ export interface OcxConfig {
    */
   injectionEffort?: string;
   /**
+   * Exact requested model ids whose ordinary turns are raised to max reasoning effort.
+   * Defaults to ["gpt-5.6-luna"]; an empty array disables the policy. Memory turns and
+   * explicitly low-effort requests remain unchanged.
+   */
+  lunaReasoningMaxModels?: string[];
+  /**
+   * Exact routed GLM model ids whose turns are always raised to max reasoning effort.
+   * Defaults to ["zai-anthropic/glm-5.2"]; an empty array disables the policy.
+   * Matching catalog rows advertise only max so client validation and wire behavior agree.
+   */
+  glmReasoningMaxModels?: string[];
+  /**
    * When true, OpenAI-routed requests include `service_tier: "priority"` (fast inference).
    * When false, service_tier is stripped so requests use default speed.
    * Undefined = passthrough (don't modify what the client sends).
@@ -472,6 +484,15 @@ export interface OcxConfig {
   autoSwitchThreshold?: number;
   /** Consecutive non-2xx upstream responses before switching future new threads. Default 3. 0 = disabled. */
   upstreamFailoverThreshold?: number;
+  /** Optional dual-upstream routing for bare OpenAI models. */
+  openAiDualUpstream?: {
+    /** Configured provider that forwards the caller-owned company credential. */
+    companyProvider: string;
+    /** Route used when a root Session has no explicit override. */
+    defaultPolicy?: "personal_first" | "company_first";
+    /** Persist company_first after the personal pool is exhausted. Default true. */
+    autoSwitchToCompany?: boolean;
+  };
   /** Virtual `combo/<id>` models spanning concrete provider/model targets (issue #133). */
   combos?: Record<string, OcxComboConfig>;
   /** Background proactive token refresh ("Token Guardian"). Off by default; see OcxTokenGuardianConfig. */

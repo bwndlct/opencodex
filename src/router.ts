@@ -125,7 +125,12 @@ function routedProviderConfig(providerName: string, provider: OcxProviderConfig)
   const explicitKeyOverride = registryEntry.authKind === "oauth"
     && registryEntry.allowKeyAuthOverride === true
     && provider.authMode === "key";
-  const canonicalAuthMode = explicitKeyOverride
+  const isNonCanonicalOpenAi = providerName === OPENAI_CODEX_PROVIDER_ID
+    && provider.authMode !== undefined
+    && provider.authMode !== "forward";
+  const canonicalAuthMode = isNonCanonicalOpenAi
+    ? provider.authMode
+    : explicitKeyOverride
     ? "key"
     : registryEntry.authKind === "forward" || registryEntry.authKind === "oauth"
       ? registryEntry.authKind
@@ -153,11 +158,11 @@ function routedProviderConfig(providerName: string, provider: OcxProviderConfig)
   const registryBaseUrlIsTemplate = /\{[^}]*\}/.test(registryEntry.baseUrl);
   const userBaseUrl = typeof provider.baseUrl === "string" ? provider.baseUrl.trim() : "";
   const userBaseUrlIsResolved = userBaseUrl.length > 0 && !/\{[^}]*\}/.test(userBaseUrl);
-  if (registryEntry.allowBaseUrlOverride && !userBaseUrlIsResolved) {
+  if ((registryEntry.allowBaseUrlOverride || isNonCanonicalOpenAi) && !userBaseUrlIsResolved) {
     throw new Error(`Invalid baseUrl for provider "${providerName}": expected a nonblank URL without unresolved placeholders`);
   }
   // Registry template URLs are presets; local/self-hosted entries opt in explicitly.
-  const baseUrl = (registryBaseUrlIsTemplate || registryEntry.allowBaseUrlOverride) && userBaseUrlIsResolved
+  const baseUrl = (registryBaseUrlIsTemplate || registryEntry.allowBaseUrlOverride || isNonCanonicalOpenAi) && userBaseUrlIsResolved
     ? userBaseUrl
     : registryEntry.baseUrl;
   assertProviderDestinationAllowed(providerName, { baseUrl, allowPrivateNetwork: provider.allowPrivateNetwork });

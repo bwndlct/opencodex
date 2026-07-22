@@ -60,7 +60,7 @@ function isKeyInCooldown(providerName: string, keyId: string, now = Date.now()):
  * Returns true only for key-auth providers with 2+ pool entries.
  */
 export function hasKeyPoolFailover(provider: OcxProviderConfig): boolean {
-  if (provider.authMode === "oauth" || provider.authMode === "forward") return false;
+  if (provider.authMode === "oauth" || provider.authMode === "forward" || provider.authMode === "passthrough") return false;
   return (provider.apiKeyPool?.length ?? 0) >= 2;
 }
 
@@ -79,7 +79,7 @@ export function rotateKeyOn429(
 ): OcxProviderConfig | null {
   const provider = config.providers[providerName];
   if (!provider) return null;
-  if (provider.authMode === "oauth" || provider.authMode === "forward") return null;
+  if (provider.authMode === "oauth" || provider.authMode === "forward" || provider.authMode === "passthrough") return null;
 
   const pool = provider.apiKeyPool;
   if (!pool || pool.length < 2) return null;

@@ -27,6 +27,44 @@ describe("OpenAI Responses passthrough sanitization", () => {
     expect(input[0]).not.toHaveProperty("id");
   });
 
+  test("company passthrough keeps the caller credential and original Responses body", () => {
+    const adapter = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://company.example/v1",
+      authMode: "passthrough",
+      headers: { "x-company-route": "company" },
+    });
+    const rawBody = {
+      model: "gpt-5.6-sol",
+      input: "keep this body unchanged",
+      previous_response_id: "resp_previous",
+      metadata: { source: "codex" },
+      reasoning: { effort: "high" },
+    };
+    const request = adapter.buildRequest({
+      modelId: "gpt-5.6-sol",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: rawBody,
+    }, {
+      headers: new Headers({
+        authorization: "Bearer company-token",
+        "openai-organization": "org-company",
+        "openai-project": "project-company",
+        "chatgpt-account-id": "must-not-forward",
+      }),
+    });
+
+    expect(request.url).toBe("https://company.example/v1/responses");
+    expect(request.headers.authorization).toBe("Bearer company-token");
+    expect(request.headers["openai-organization"]).toBe("org-company");
+    expect(request.headers["openai-project"]).toBe("project-company");
+    expect(request.headers["chatgpt-account-id"]).toBeUndefined();
+    expect(request.headers["x-company-route"]).toBe("company");
+    expect(JSON.parse(request.body)).toEqual(rawBody);
+  });
+
   test("strips invalid type-specific ids from serialized input items", () => {
     const adapter = createResponsesPassthroughAdapter(provider);
     const encryptedContent = "opaque-openai-encrypted-content";

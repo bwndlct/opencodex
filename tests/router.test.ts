@@ -88,6 +88,26 @@ describe("routeModel registry effort defaults", () => {
     expect(() => routeModel(unavailable, "gpt-5.5")).toThrow(NoEnabledOpenAiProviderError);
   });
 
+  test("routes bare OpenAI models through a noncanonical company passthrough without pool auth", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "openai",
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://company.example/v1",
+          authMode: "passthrough",
+        },
+      },
+    };
+
+    const route = routeModel(config, "gpt-5.6-sol");
+
+    expect(route.providerName).toBe("openai");
+    expect(route.provider.authMode).toBe("passthrough");
+    expect(route.codexAccountMode).toBeUndefined();
+  });
+
   test("rejects legacy chatgpt namespaces even when configured", () => {
     const config: OcxConfig = {
       port: 10100,

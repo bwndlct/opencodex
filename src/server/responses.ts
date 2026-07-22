@@ -6,7 +6,7 @@ import {
 } from "../config";
 import { parseRequest } from "../responses/parser";
 import { buildCompactV1Output, COMPACT_PROMPT, decodeCompactionSummary, extractCompactUserMessages } from "../responses/compaction";
-import { FORWARD_HEADERS } from "../adapters/openai-responses";
+import { copyPassthroughHeaders, FORWARD_HEADERS } from "../adapters/openai-responses";
 import { expandPreviousResponseInput, previousResponseConversationId, rememberResponseState } from "../responses/state";
 import { routeModel } from "../router";
 import {
@@ -1823,8 +1823,21 @@ export async function handleResponsesCompact(
       throw err;
     }
     const base = (compactProvider.baseUrl ?? "").replace(/\/$/, "");
-    if (compactProvider.apiKey) headers.set("authorization", `Bearer ${resolveEnvValue(compactProvider.apiKey)}`);
-    const { reasoning: _reasoning, ...compactBody } = raw as typeof raw & { reasoning?: unknown };
+    const passthrough = compactProvider.authMode === "passthrough";
+    if (passthrough) {
+      if (compactProvider.headers) {
+        for (const [name, value] of Object.entries(compactProvider.headers)) headers.set(name, value);
+      }
+      copyPassthroughHeaders(headers, req.headers);
+    } else if (compactProvider.apiKey) {
+      headers.set("authorization", `Bearer ${resolveEnvValue(compactProvider.apiKey)}`);
+    }
+    const compactBody = passthrough
+      ? raw
+      : (() => {
+        const { reasoning: _reasoning, ...withoutReasoning } = raw as typeof raw & { reasoning?: unknown };
+        return withoutReasoning;
+      })();
     let upstream: Response;
     try {
       upstream = await fetch(`${base}/responses/compact`, {

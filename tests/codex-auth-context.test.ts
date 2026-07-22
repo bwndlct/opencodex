@@ -297,6 +297,50 @@ describe("Codex auth context", () => {
     expect(headers.get("openai-beta")).toBe("responses=experimental");
   });
 
+  test("company passthrough compact keeps the caller credential and excludes ChatGPT account headers", async () => {
+    const cfg: OcxConfig = {
+      port: 10100,
+      defaultProvider: "openai",
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://company.example/v1",
+          authMode: "passthrough",
+        },
+      },
+    };
+    const originalFetch = globalThis.fetch;
+    let seenUrl = "";
+    let seenHeaders = new Headers();
+    let seenBody: unknown;
+    globalThis.fetch = async (input, init) => {
+      seenUrl = String(input);
+      seenHeaders = new Headers(init?.headers);
+      seenBody = JSON.parse(String(init?.body));
+      return Response.json({ output: [] });
+    };
+
+    try {
+      const response = await handleResponsesCompact(new Request("http://localhost/v1/responses/compact", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: "Bearer company-token",
+          "chatgpt-account-id": "must-not-forward",
+        },
+        body: JSON.stringify({ model: "gpt-5.6-sol", input: [], reasoning: { effort: "high" } }),
+      }), cfg, { model: "", provider: "" });
+
+      expect(response.status).toBe(200);
+      expect(seenUrl).toBe("https://company.example/v1/responses/compact");
+      expect(seenHeaders.get("authorization")).toBe("Bearer company-token");
+      expect(seenHeaders.get("chatgpt-account-id")).toBeNull();
+      expect(seenBody).toEqual({ model: "gpt-5.6-sol", input: [], reasoning: { effort: "high" } });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("pool token failure marks reauth and throws before fallback", async () => {
     await expect(resolveCodexAuthContext(new Headers({ authorization: "Bearer main_token" }), config(), "pool"))
       .rejects.toBeInstanceOf(CodexAuthContextError);

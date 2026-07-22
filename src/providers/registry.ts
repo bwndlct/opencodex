@@ -847,7 +847,7 @@ export function getProviderRegistryEntry(id: string): ProviderRegistryEntry | un
  */
 export function providerCodexAccountMode(id: string, provider?: OcxProviderConfig): CodexAccountMode | undefined {
   const registryMode = getProviderRegistryEntry(id)?.codexAccountMode;
-  if (id !== "openai") return registryMode;
+  if (id !== "openai" || (provider?.authMode !== undefined && provider.authMode !== "forward")) return undefined;
   const persisted = provider?.codexAccountMode;
   if (persisted === "pool" || persisted === "direct") return persisted;
   return registryMode ?? "pool";

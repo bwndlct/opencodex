@@ -25,6 +25,21 @@ export const FORWARD_HEADERS = [
   "x-responsesapi-include-timing-metrics",
 ];
 
+const PASSTHROUGH_HEADERS = [
+  ...FORWARD_HEADERS.filter(name => name !== "chatgpt-account-id"),
+  "openai-organization",
+  "openai-project",
+];
+
+/** Copy credentials and request metadata that a company Responses relay may require. */
+export function copyPassthroughHeaders(target: Headers, incoming?: Headers): void {
+  if (!incoming) return;
+  for (const name of PASSTHROUGH_HEADERS) {
+    const value = incoming.get(name);
+    if (value) target.set(name, value);
+  }
+}
+
 function sanitizeReasoningInputContent(body: unknown): unknown {
   if (!body || typeof body !== "object" || Array.isArray(body)) return body;
   const raw = body as Record<string, unknown>;
@@ -438,6 +453,12 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
           headers["authorization"] = `Bearer ${override.accessToken}`;
           headers["chatgpt-account-id"] = override.chatgptAccountId;
         }
+      } else if (provider.authMode === "passthrough") {
+        url = `${provider.baseUrl.replace(/\/+$/, "")}/responses`;
+        if (provider.headers) Object.assign(headers, provider.headers);
+        const forwarded = new Headers();
+        copyPassthroughHeaders(forwarded, incoming?.headers);
+        for (const [name, value] of forwarded) headers[name] = value;
       } else {
         const base = provider.baseUrl.replace(/\/v1\/?$/, "");
         url = `${base}/v1/responses`;
@@ -446,13 +467,13 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       }
 
       const forward = provider.authMode === "forward";
+      const passthrough = provider.authMode === "passthrough";
       const unexpandedMiss = !!parsed.previousResponseId && parsed._previousResponseInputExpanded !== true;
-      let outBody = stripPreviousResponseId(
-        parsed._rawBody,
-        forward || parsed._previousResponseInputExpanded === true,
-      );
+      let outBody = passthrough
+        ? parsed._rawBody
+        : stripPreviousResponseId(parsed._rawBody, forward || parsed._previousResponseInputExpanded === true);
       if (forward) outBody = repairOrphanedInputItems(outBody, unexpandedMiss);
-      else outBody = stripConflictingHostedTools(outBody);
+      else if (!passthrough) outBody = stripConflictingHostedTools(outBody);
       return {
         url,
         method: "POST",

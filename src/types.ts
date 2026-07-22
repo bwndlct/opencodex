@@ -633,13 +633,14 @@ export interface OcxProviderConfig {
   headers?: Record<string, string>;
   /**
    * "key" (default): authenticate upstream with `apiKey`.
-   * "forward": relay the caller's incoming auth headers verbatim (OAuth passthrough; gpt only).
+   * "forward": relay the caller's incoming auth headers to the official ChatGPT Codex backend.
+   * "passthrough": relay the caller's company API credential to a non-ChatGPT Responses endpoint.
    * "oauth": resolve a stored OAuth access token (auto-refreshed) and use it as the Bearer key.
    * Only the openai-responses adapter implements "forward"; openai-chat uses its own key/token.
    * "local": local runtime (Ollama etc.) — no remote key required. Valid only for
    * providers whose registry entry declares authKind "local" (management API enforces).
    */
-  authMode?: "key" | "forward" | "oauth" | "local";
+  authMode?: "key" | "forward" | "passthrough" | "oauth" | "local";
   /** Allow an explicitly key/oauth provider to run without a credential (for keyless local proxies). */
   keyOptional?: boolean;
   /**

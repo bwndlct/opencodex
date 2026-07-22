@@ -1634,6 +1634,20 @@ describe("OpenAI API trusted catalog augmentation", () => {
 });
 
 describe("native slug allowlist", () => {
+  test("can retain supported hidden natives for the catalog-shaped projection", () => {
+    const liveModels = [
+      { slug: "gpt-5.5", visibility: "hide" },
+      { slug: "gpt-5.4", visibility: "hide" },
+      { slug: "gpt-5.6-luna", visibility: "list" },
+      { slug: "gpt-5.2", visibility: "hide" },
+    ];
+
+    expect(filterSupportedNativeSlugs(liveModels, true)).toEqual([
+      "gpt-5.5", "gpt-5.4", "gpt-5.6-luna",
+    ]);
+    expect(filterSupportedNativeSlugs(liveModels)).toEqual(["gpt-5.6-luna"]);
+  });
+
   test("drops legacy/internal natives from a live Codex catalog", () => {
     const liveModels = [
       { slug: "gpt-5.5", visibility: "list" },

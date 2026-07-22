@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   applyNativeVisibility,
+  buildCodexCatalogEntries,
   disabledNativeSlugs,
   mergeCatalogEntriesForSync,
   NATIVE_OPENAI_MODELS,
@@ -45,6 +46,24 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     expect(filtered).not.toContain("gpt-5.6-sol");
     // Routed blocklist entries never affect the native list.
     expect(filtered.length).toBe(all.length - 1);
+  });
+
+  test("client-version projection retains hidden native rows while matching the routed model set", () => {
+    const config = makeConfig({ disabledModels: ["gpt-5.4", "gpt-5.4-mini"] });
+    const entries = buildCodexCatalogEntries(
+      config,
+      [{ provider: "zai-anthropic", id: "glm-5.2", contextWindow: 900_000 }],
+      nativeTemplate(),
+    );
+
+    expect(new Set(entries.map(entry => entry.slug))).toEqual(new Set([
+      ...NATIVE_OPENAI_MODELS,
+      "zai-anthropic/glm-5.2",
+    ]));
+    expect(entries.find(entry => entry.slug === "gpt-5.4")?.visibility).toBe("hide");
+    expect(entries.find(entry => entry.slug === "gpt-5.4-mini")?.visibility).toBe("hide");
+    expect(entries.find(entry => entry.slug === "gpt-5.6-luna")?.visibility).toBe("list");
+    expect(entries.find(entry => entry.slug === "zai-anthropic/glm-5.2")?.visibility).toBe("list");
   });
 
   test("nativeModelRows lists the full static supported set regardless of disabled state", () => {

@@ -4,6 +4,7 @@ import App from "./App";
 import { LanguageProvider } from "./i18n";
 import "./styles.css";
 import "./styles-sessions.css";
+import "./styles-settings.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

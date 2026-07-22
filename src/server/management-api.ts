@@ -75,9 +75,105 @@ export const VERSION = (() => {
   }
 })();
 
+const DEFAULT_ROUTING_LUNA_MODELS = ["gpt-5.6-luna"];
+const DEFAULT_ROUTING_GLM_MODELS = ["zai-anthropic/glm-5.2"];
+const ROUTING_MODEL_LIST_LIMIT = 32;
+const ROUTING_MODEL_ID_LIMIT = 256;
+
+type RoutingSettingsBody = Record<string, unknown>;
+
+function routingCompanyProviders(config: OcxConfig): string[] {
+  return Object.entries(config.providers)
+    .filter(([name, provider]) => name !== "openai"
+      && provider.disabled !== true
+      && provider.adapter === "openai-responses"
+      && provider.authMode === "passthrough")
+    .map(([name]) => name)
+    .sort();
+}
+
+function routingSettingsDTO(config: OcxConfig): Record<string, unknown> {
+  const dual = config.openAiDualUpstream;
+  const companyProviders = routingCompanyProviders(config);
+  return {
+    openAiDualUpstream: dual ? {
+      companyProvider: dual.companyProvider,
+      defaultPolicy: dual.defaultPolicy ?? "company_first",
+      autoSwitchToCompany: dual.autoSwitchToCompany !== false,
+    } : null,
+    companyProviders,
+    canEnableDualUpstream: Boolean(
+      config.providers.openai
+      && config.providers.openai.disabled !== true
+      && isCanonicalOpenAiForwardProvider(config.providers.openai)
+      && companyProviders.length > 0,
+    ),
+    lunaReasoningMaxModels: config.lunaReasoningMaxModels ?? DEFAULT_ROUTING_LUNA_MODELS,
+    glmReasoningMaxModels: config.glmReasoningMaxModels ?? DEFAULT_ROUTING_GLM_MODELS,
+    lunaReasoningConfigured: config.lunaReasoningMaxModels !== undefined,
+    glmReasoningConfigured: config.glmReasoningMaxModels !== undefined,
+    appliesTo: "future_requests",
+  };
+}
+
+function isRoutingPolicy(value: unknown): value is "personal_first" | "company_first" {
+  return value === "personal_first" || value === "company_first";
+}
+
+function normalizeRoutingModelList(value: unknown, field: string): { models?: string[]; error?: string } {
+  if (!Array.isArray(value)) return { error: `${field} must be an array of model ids` };
+  if (value.length > ROUTING_MODEL_LIST_LIMIT) return { error: `${field} may contain at most ${ROUTING_MODEL_LIST_LIMIT} model ids` };
+  const models: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of value) {
+    if (typeof raw !== "string") return { error: `${field} entries must be strings` };
+    const model = raw.trim();
+    if (!model || model.length > ROUTING_MODEL_ID_LIMIT || /[\u0000-\u001f\u007f]/.test(model)) {
+      return { error: `${field} entries must be nonblank, control-free ids up to ${ROUTING_MODEL_ID_LIMIT} characters` };
+    }
+    if (seen.has(model)) return { error: `${field} entries must be unique` };
+    seen.add(model);
+    models.push(model);
+  }
+  return { models };
+}
+
+function sameRoutingModels(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((model, index) => model === right[index]);
+}
+
+function routingDualConfigError(config: OcxConfig, value: unknown): string | null {
+  if (value === null) return null;
+  if (!isPlainRecord(value)) return "openAiDualUpstream must be an object or null";
+  const allowed = new Set(["companyProvider", "defaultPolicy", "autoSwitchToCompany"]);
+  if (!Object.keys(value).every(key => allowed.has(key))) return "openAiDualUpstream contains an unsupported field";
+  if (typeof value.companyProvider !== "string" || !isValidProviderName(value.companyProvider)) {
+    return "openAiDualUpstream.companyProvider must be a valid provider name";
+  }
+  if (value.defaultPolicy !== undefined && !isRoutingPolicy(value.defaultPolicy)) {
+    return "openAiDualUpstream.defaultPolicy must be personal_first or company_first";
+  }
+  if (value.autoSwitchToCompany !== undefined && typeof value.autoSwitchToCompany !== "boolean") {
+    return "openAiDualUpstream.autoSwitchToCompany must be a boolean";
+  }
+  const personal = config.providers.openai;
+  if (!personal || personal.disabled === true || !isCanonicalOpenAiForwardProvider(personal)) {
+    return "dual upstream requires the canonical personal openai provider";
+  }
+  const company = config.providers[value.companyProvider];
+  if (!company || company.disabled === true || value.companyProvider === "openai") {
+    return "openAiDualUpstream.companyProvider must reference an existing company provider";
+  }
+  if (company.adapter !== "openai-responses" || company.authMode !== "passthrough") {
+    return "companyProvider must use the openai-responses adapter with authMode passthrough";
+  }
+  return null;
+}
+
 export interface ManagementApiDeps {
   toggleCodexMultiAgentV2?: (enabled: boolean) => void;
   refreshCodexCatalog?: () => Promise<void>;
+  saveConfig?: (config: OcxConfig) => void;
   clearThreadAccountMap?: () => void;
   clearProviderQuotaCache?: () => void;
   primeCodexPoolQuotas?: (config: OcxConfig, reason: string) => Promise<void> | void;
@@ -289,6 +385,72 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
 
   if (url.pathname === "/api/config" && req.method === "PUT") {
     return jsonResponse({ error: "Full config PUT is disabled. Use /api/providers POST for provider changes." }, 405);
+  }
+
+  if (url.pathname === "/api/routing-settings" && req.method === "GET") {
+    return jsonResponse(routingSettingsDTO(config));
+  }
+
+  if (url.pathname === "/api/routing-settings" && req.method === "PUT") {
+    let body: unknown;
+    try { body = await req.json(); } catch { return jsonResponse({ error: "invalid JSON body" }, 400); }
+    if (!isPlainRecord(body)) return jsonResponse({ error: "request body must be an object" }, 400);
+    const allowed = new Set(["openAiDualUpstream", "lunaReasoningMaxModels", "glmReasoningMaxModels"]);
+    if (!Object.keys(body).every(key => allowed.has(key)) || Object.keys(body).length === 0) {
+      return jsonResponse({ error: "body contains unsupported fields" }, 400);
+    }
+
+    if (Object.hasOwn(body, "openAiDualUpstream")) {
+      const error = routingDualConfigError(config, body.openAiDualUpstream);
+      if (error) return jsonResponse({ error }, 400);
+    }
+    const luna = Object.hasOwn(body, "lunaReasoningMaxModels")
+      ? normalizeRoutingModelList(body.lunaReasoningMaxModels, "lunaReasoningMaxModels")
+      : {};
+    if (luna.error) return jsonResponse({ error: luna.error }, 400);
+    const glm = Object.hasOwn(body, "glmReasoningMaxModels")
+      ? normalizeRoutingModelList(body.glmReasoningMaxModels, "glmReasoningMaxModels")
+      : {};
+    if (glm.error) return jsonResponse({ error: glm.error }, 400);
+
+    const nextConfig: OcxConfig = { ...config };
+    if (Object.hasOwn(body, "openAiDualUpstream")) {
+      if (body.openAiDualUpstream === null) delete nextConfig.openAiDualUpstream;
+      else if (isPlainRecord(body.openAiDualUpstream)) {
+        const current = config.openAiDualUpstream;
+        const companyProvider = body.openAiDualUpstream.companyProvider;
+        const defaultPolicy = body.openAiDualUpstream.defaultPolicy;
+        const autoSwitchToCompany = body.openAiDualUpstream.autoSwitchToCompany;
+        nextConfig.openAiDualUpstream = {
+          companyProvider: typeof companyProvider === "string" ? companyProvider : current?.companyProvider ?? "",
+          defaultPolicy: defaultPolicy === undefined
+            ? current?.defaultPolicy ?? "company_first"
+            : isRoutingPolicy(defaultPolicy) ? defaultPolicy : current?.defaultPolicy ?? "company_first",
+          autoSwitchToCompany: autoSwitchToCompany === undefined
+            ? current?.autoSwitchToCompany ?? true
+            : typeof autoSwitchToCompany === "boolean" ? autoSwitchToCompany : current?.autoSwitchToCompany ?? true,
+        };
+      }
+    }
+    if (luna.models !== undefined) nextConfig.lunaReasoningMaxModels = luna.models;
+    if (glm.models !== undefined) nextConfig.glmReasoningMaxModels = glm.models;
+
+    const catalogRefreshNeeded = Boolean(
+      (luna.models !== undefined
+        && !sameRoutingModels(luna.models, config.lunaReasoningMaxModels ?? DEFAULT_ROUTING_LUNA_MODELS))
+      || (glm.models !== undefined
+        && !sameRoutingModels(glm.models, config.glmReasoningMaxModels ?? DEFAULT_ROUTING_GLM_MODELS)),
+    );
+
+    (deps.saveConfig ?? saveConfig)(nextConfig);
+    if (Object.hasOwn(body, "openAiDualUpstream")) {
+      if (nextConfig.openAiDualUpstream) config.openAiDualUpstream = nextConfig.openAiDualUpstream;
+      else delete config.openAiDualUpstream;
+    }
+    if (luna.models !== undefined) config.lunaReasoningMaxModels = luna.models;
+    if (glm.models !== undefined) config.glmReasoningMaxModels = glm.models;
+    if (catalogRefreshNeeded) await refreshCodexCatalogBestEffort();
+    return jsonResponse({ ok: true, catalogRefreshNeeded, ...routingSettingsDTO(config) });
   }
 
   if (url.pathname === "/api/settings" && req.method === "GET") {

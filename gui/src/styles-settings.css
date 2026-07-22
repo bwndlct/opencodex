@@ -1,0 +1,219 @@
+.settings-page {
+  width: min(100%, 960px);
+  margin: 0 auto;
+  padding: var(--space-8) var(--space-6) var(--space-12);
+}
+
+.settings-loading {
+  padding: var(--space-8) var(--space-6);
+}
+
+.settings-load-failure {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-4);
+}
+
+.settings-load-failure .btn svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+
+.settings-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-6);
+  margin-bottom: var(--space-8);
+}
+
+.settings-header h1 {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-display);
+  letter-spacing: 0;
+  line-height: var(--leading-tight);
+}
+
+.settings-header p {
+  margin: 0;
+  max-width: 620px;
+}
+
+.settings-eyebrow {
+  margin-bottom: var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-caption);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+}
+
+.settings-section {
+  border-top: 1px solid var(--border);
+  padding: var(--space-8) 0;
+}
+
+.settings-section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-6);
+  margin-bottom: var(--space-5);
+}
+
+.settings-section-heading h2 {
+  margin: 0 0 var(--space-1-5);
+  font-size: var(--text-title);
+  line-height: var(--leading-tight);
+}
+
+.settings-section-heading p {
+  margin: 0;
+  max-width: 640px;
+}
+
+.settings-rows {
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-6);
+  min-height: 64px;
+  border-top: 1px solid var(--border-soft);
+  padding: var(--space-4) 0;
+}
+
+.settings-row > div:first-child,
+.settings-row-top > div:first-child {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.settings-row strong {
+  font-size: var(--text-control);
+  font-weight: var(--weight-semibold);
+}
+
+.settings-row .muted {
+  font-size: var(--text-label);
+}
+
+.settings-row-stack {
+  display: grid;
+  align-items: stretch;
+  gap: var(--space-3);
+}
+
+.settings-row-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.settings-model-input {
+  width: 100%;
+  min-height: var(--control-lg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: var(--text-control) var(--mono);
+  padding: 0 var(--space-3);
+  outline: none;
+}
+
+.settings-model-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+.settings-model-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.settings-inline-warning,
+.settings-applies {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  color: var(--amber);
+  font-size: var(--text-label);
+  line-height: var(--leading-body);
+}
+
+.settings-inline-warning {
+  margin: var(--space-4) 0;
+}
+
+.settings-inline-warning svg,
+.settings-applies svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.settings-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-5);
+  padding-top: var(--space-6);
+}
+
+.settings-applies {
+  color: var(--muted);
+}
+
+.settings-save {
+  min-width: 118px;
+}
+
+.settings-save svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+
+@media (max-width: 760px) {
+  .settings-page {
+    padding: var(--space-6) var(--space-4) var(--space-10);
+  }
+
+  .settings-header,
+  .settings-section-heading,
+  .settings-row,
+  .settings-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .settings-section-heading > .switch,
+  .settings-row > .switch,
+  .settings-row > .custom-select,
+  .settings-row > .usage-segmented {
+    align-self: flex-start;
+  }
+
+  .settings-row > .usage-segmented {
+    width: 100%;
+  }
+
+  .settings-row > .usage-segmented .usage-segmented-btn {
+    flex: 1 1 0;
+    min-height: var(--control-touch);
+  }
+
+  .settings-footer {
+    gap: var(--space-4);
+  }
+
+  .settings-save {
+    width: 100%;
+  }
+}

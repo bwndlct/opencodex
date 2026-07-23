@@ -54,6 +54,40 @@ All user-facing strings go through `useT()` / `t("key")`. Add new keys to all
 four locale files: `en.ts` (source of truth), `zh.ts`, `ko.ts`, `de.ts`.
 Technical literals (header names, CLI samples, model identifiers) are exempt.
 
+## Testing guidelines
+
+This fork carries custom features (routing overrides, dual upstream, session
+identity, etc.) that upstream does not have. Tests are the regression net that
+protects these features when syncing upstream commits — but the test suite
+should stay lean, not exhaustive.
+
+- Write fewer tests, not more. Cover the critical path and key edge cases, then
+  stop. Do not enumerate every input variant or duplicate scenarios that an
+  existing test already exercises.
+- Before adding a test, check whether an existing test already covers the same
+  behavior. If it does, extend it instead of writing a new file or a parallel
+  test block.
+- Delegate test-writing to GLM or Luna models whenever possible. The Sol root
+  agent plans and reviews; the worker drafts the test. Keep the test contract
+  and acceptance criteria in the delegation prompt so the worker has enough
+  context without guessing.
+
+## Fork intrusion and upstream compatibility
+
+This is a fork of `lidge-jun/opencodex`. Upstream advances frequently and must
+be re-syncable without manual conflict resolution on core files.
+
+- Prefer new files over editing upstream files. Fork-specific handlers belong
+  in dedicated modules (e.g. `fork-api-handlers.ts`), not inline in
+  `management-api.ts` or `responses.ts`.
+- When editing an upstream file is unavoidable, keep the change minimal and
+  clearly delimited (a single import, one hook call, one routing branch). The
+  smaller the diff against upstream, the easier the next merge.
+- Do not refactor or reformat upstream code that you are not actively changing.
+  Cosmetic edits inflate the merge diff and create conflicts for no benefit.
+- Group fork features into self-contained modules with clear public APIs so
+  that upstream files only need a one-line wiring point.
+
 ## Branch and worktree cleanup
 
 When work on a `codex/*` feature branch is finished and merged (or committed)

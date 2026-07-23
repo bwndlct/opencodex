@@ -28,7 +28,10 @@ function formatTime(value: number, locale: Locale): string {
 
 function formatAge(startedAt: number, now: number, t: TFn): string {
   const seconds = Math.max(0, Math.floor((now - startedAt) / 1000));
-  return t("sessions.age.seconds", { count: seconds });
+  if (seconds < 60) return t("sessions.age.seconds", { count: seconds });
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return t("sessions.age.minutes", { count: minutes });
+  return t("sessions.age.hours", { count: Math.floor(minutes / 60) });
 }
 
 function modelLabel(provider: string | undefined, model: string | undefined): string | undefined {

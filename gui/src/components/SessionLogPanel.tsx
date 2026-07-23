@@ -14,7 +14,8 @@ function formatLogTime(value: number, localeTag?: string): string {
 }
 
 function formatDuration(ms: number): string {
-  return `${Math.round(ms)}ms`;
+  const seconds = ms / 1000;
+  return `${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)}s`;
 }
 
 /**

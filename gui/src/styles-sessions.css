@@ -99,9 +99,23 @@
   font-size: var(--text-label);
 }
 .session-log-panel--error { color: var(--red); }
-.session-log-table { min-width: 600px; }
+.session-log-table {
+  min-width: 760px;
+  table-layout: fixed;
+}
+.session-log-table th:nth-child(1) { width: 14%; }
+.session-log-table th:nth-child(2) { width: 10%; }
+.session-log-table th:nth-child(3) { width: 19%; }
+.session-log-table th:nth-child(4) { width: 13%; }
+.session-log-table th:nth-child(5) { width: 10%; }
+.session-log-table th:nth-child(6) { width: 22%; }
+.session-log-table th:nth-child(7) { width: 12%; }
 .session-log-table th,
 .session-log-table td { font-size: var(--text-caption); padding: 5px 8px; }
+.session-log-table td:nth-child(3),
+.session-log-table td:nth-child(4) {
+  overflow-wrap: anywhere;
+}
 .session-log-request-id { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .session-id-cell code,

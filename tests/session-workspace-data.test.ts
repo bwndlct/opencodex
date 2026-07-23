@@ -251,6 +251,7 @@ describe("session history parser", () => {
       sessions: [
         {
           rootSessionId: "root-a",
+          threadName: "Fix task title",
           lastSeenAt: 4000,
           requestCount: 10,
           measuredRequests: 8,
@@ -282,6 +283,7 @@ describe("session history parser", () => {
     const a = result.sessions[0];
     expect(a).toEqual({
       rootSessionId: "root-a",
+      threadName: "Fix task title",
       lastSeenAt: 4000,
       requestCount: 10,
       measuredRequests: 8,

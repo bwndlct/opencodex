@@ -1,8 +1,6 @@
 import { sanitizeIdentityValue } from "./request-identity";
 import type { SessionRoutePolicy } from "./session-route-policy";
-import { readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
-import { homedir } from "node:os";
+import { threadNameFor } from "./thread-name-index";
 
 export interface RequestActivityIdentity {
   rootSessionId?: string;
@@ -170,37 +168,6 @@ export function updateRequestActivityRoute(requestId: string, observation: unkno
   };
 }
 
-
-let threadNameCache: Map<string, string> | null = null;
-let threadNameCacheMtime = 0;
-
-function getThreadNameMap(): Map<string, string> {
-  const indexPath = join(homedir(), ".codex", "session_index.jsonl");
-  let mtime = 0;
-  try {
-    mtime = statSync(indexPath).mtimeMs;
-  } catch {
-    return threadNameCache ?? new Map();
-  }
-  if (threadNameCache && mtime === threadNameCacheMtime) return threadNameCache;
-  const map = new Map<string, string>();
-  try {
-    const content = readFileSync(indexPath, "utf8");
-    for (const line of content.split("\n")) {
-      if (!line.trim()) continue;
-      try {
-        const entry = JSON.parse(line);
-        if (entry.id && entry.thread_name) {
-          map.set(String(entry.id), String(entry.thread_name));
-        }
-      } catch { /* skip malformed lines */ }
-    }
-  } catch { /* file unreadable */ }
-  threadNameCache = map;
-  threadNameCacheMtime = mtime;
-  return map;
-}
-
 export function snapshotRequestActivity(generatedAt = Date.now()): RequestActivitySnapshot {
   const sessions = new Map<string, {
     activeRequests: number;
@@ -246,17 +213,20 @@ export function snapshotRequestActivity(generatedAt = Date.now()): RequestActivi
     unattributedActiveRequests,
     sessions: [...sessions.entries()]
       .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
-      .map(([rootSessionId, session]) => ({
-        rootSessionId,
-        ...(getThreadNameMap().get(rootSessionId) ? { threadName: getThreadNameMap().get(rootSessionId) } : {}),
-        activeRequests: session.activeRequests,
-        ...(session.routedRequests > 0 ? { activeSourceCounts: session.activeSourceCounts } : {}),
-        executionSessionIds: [...session.executionSessionIds].sort((left, right) => (
-          left < right ? -1 : left > right ? 1 : 0
-        )),
-        oldestStartedAt: session.oldestStartedAt,
-        ...(session.latestRouteObservation?.observation ?? {}),
-      })),
+      .map(([rootSessionId, session]) => {
+        const threadName = threadNameFor(rootSessionId);
+        return {
+          rootSessionId,
+          ...(threadName ? { threadName } : {}),
+          activeRequests: session.activeRequests,
+          ...(session.routedRequests > 0 ? { activeSourceCounts: session.activeSourceCounts } : {}),
+          executionSessionIds: [...session.executionSessionIds].sort((left, right) => (
+            left < right ? -1 : left > right ? 1 : 0
+          )),
+          oldestStartedAt: session.oldestStartedAt,
+          ...(session.latestRouteObservation?.observation ?? {}),
+        };
+      }),
   };
 }
 

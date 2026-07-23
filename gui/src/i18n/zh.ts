@@ -994,7 +994,7 @@ export const zh: Record<TKey, string> = {
   "sessions.fallbacks": "回退",
   "sessions.emptyActive": "当前没有活动 Session。",
   "sessions.emptyRecent": "当前没有最近完成的 Session。",
-  "sessions.col.session": "根 Session",
+  "sessions.col.session": "任务名",
   "sessions.col.activity": "活动",
   "sessions.col.execution": "执行",
   "sessions.col.model": "模型",

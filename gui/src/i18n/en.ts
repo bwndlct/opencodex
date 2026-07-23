@@ -996,7 +996,7 @@ export const en = {
   "sessions.fallbacks": "Fallbacks",
   "sessions.emptyActive": "No active Sessions.",
   "sessions.emptyRecent": "No recent Sessions.",
-  "sessions.col.session": "Root Session",
+  "sessions.col.session": "Task name",
   "sessions.col.activity": "Activity",
   "sessions.col.execution": "Execution",
   "sessions.col.model": "Model",

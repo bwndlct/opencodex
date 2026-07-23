@@ -271,10 +271,12 @@ function parseRecentSessionCandidate(value: unknown, sequence: number): RecentSe
   const rootSessionId = sanitizeIdentityValue(value.rootSessionId);
   if (!rootSessionId || !isFiniteNonNegativeNumber(value.timestamp)) return undefined;
 
+  const threadName = sanitizeIdentityValue(value.threadName);
   const requestedModel = requestedModelFields(value.requestedModel);
   const effectiveModel = sanitizeIdentityValue(value.resolvedModel) ?? sanitizeIdentityValue(value.model);
   const session: RecentSession = {
     rootSessionId,
+    ...(threadName ? { threadName } : {}),
     lastSeenAt: value.timestamp,
     ...(sanitizeIdentityValue(value.executionSessionId)
       ? { executionSessionId: sanitizeIdentityValue(value.executionSessionId) }
@@ -303,11 +305,13 @@ function parseHistorySessionCandidate(value: unknown): SessionHistoryEntry | und
 
   const requestedProvider = sanitizeIdentityValue(value.requestedProvider);
   const requestedModel = sanitizeIdentityValue(value.requestedModel);
+  const threadName = sanitizeIdentityValue(value.threadName);
   const effectiveProvider = sanitizeIdentityValue(value.effectiveProvider) ?? sanitizeIdentityValue(value.provider);
   const effectiveModel = sanitizeIdentityValue(value.effectiveModel) ?? sanitizeIdentityValue(value.resolvedModel);
 
   const entry: SessionHistoryEntry = {
     rootSessionId,
+    ...(threadName ? { threadName } : {}),
     lastSeenAt: value.lastSeenAt,
     ...(sanitizeIdentityValue(value.executionSessionId)
       ? { executionSessionId: sanitizeIdentityValue(value.executionSessionId) }

@@ -64,6 +64,22 @@ afterEach(() => {
 });
 
 describe("GET /api/sessions/history", () => {
+  test("includes the Codex task name for each root session", async () => {
+    writeFileSync(join(isolatedCodexHome!.path, "session_index.jsonl"), `${JSON.stringify({
+      id: "sess-a",
+      thread_name: "Fix task title",
+    })}\n`, { mode: 0o600 });
+    writeFixture([makeEntry({ rootSessionId: "sess-a" })]);
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/sessions/history", server.url));
+      const body = await res.json();
+      expect(body.sessions[0].threadName).toBe("Fix task title");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("returns documented envelope with generatedAt and retentionDays", async () => {
     writeFixture([makeEntry({ rootSessionId: "sess-a" })]);
     const server = startServer(0);

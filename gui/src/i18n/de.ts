@@ -974,7 +974,7 @@ export const de = {
   "sessions.fallbacks": "Fallbacks",
   "sessions.emptyActive": "Keine aktiven Sessions.",
   "sessions.emptyRecent": "Keine kürzlichen Sessions.",
-  "sessions.col.session": "Root-Session",
+  "sessions.col.session": "Aufgabenname",
   "sessions.col.activity": "Aktivität",
   "sessions.col.execution": "Ausführung",
   "sessions.col.model": "Modell",

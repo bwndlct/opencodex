@@ -2,6 +2,7 @@ import type { PersistedUsageEntry } from "../usage/log";
 import { USAGE_RETENTION_DAYS } from "../usage/retention";
 import { usageDisplayTotalTokens } from "../usage/totals";
 import { sanitizeIdentityValue } from "./request-identity";
+import { threadNameFor } from "./thread-name-index";
 
 export const SESSION_HISTORY_DEFAULT_LIMIT = 100;
 export const SESSION_HISTORY_MAX_LIMIT = 500;
@@ -11,6 +12,7 @@ export const SESSION_RETENTION_DAYS = USAGE_RETENTION_DAYS;
 
 export interface SessionHistorySummary {
   rootSessionId: string;
+  threadName?: string;
   lastSeenAt: number;
   requestCount: number;
   measuredRequests: number;
@@ -144,8 +146,10 @@ export function aggregateSessionHistory(
     .slice(0, limit)
     .map(acc => {
       const latest = acc.latest;
+      const threadName = threadNameFor(acc.rootSessionId);
       const summary: SessionHistorySummary = {
         rootSessionId: acc.rootSessionId,
+        ...(threadName ? { threadName } : {}),
         lastSeenAt: acc.lastSeenAt,
         requestCount: acc.requestCount,
         measuredRequests: acc.measuredRequests,

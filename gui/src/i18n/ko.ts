@@ -994,7 +994,7 @@ export const ko: Record<TKey, string> = {
   "sessions.fallbacks": "대체 경로",
   "sessions.emptyActive": "활성 세션이 없습니다.",
   "sessions.emptyRecent": "최근 세션이 없습니다.",
-  "sessions.col.session": "루트 세션",
+  "sessions.col.session": "작업 이름",
   "sessions.col.activity": "활동",
   "sessions.col.execution": "실행",
   "sessions.col.model": "모델",

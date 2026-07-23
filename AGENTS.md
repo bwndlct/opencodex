@@ -53,3 +53,27 @@ Never point the formal plist at a candidate home or port.
 All user-facing strings go through `useT()` / `t("key")`. Add new keys to all
 four locale files: `en.ts` (source of truth), `zh.ts`, `ko.ts`, `de.ts`.
 Technical literals (header names, CLI samples, model identifiers) are exempt.
+
+## Branch and worktree cleanup
+
+When work on a `codex/*` feature branch is finished and merged (or committed)
+into `main`, immediately clean up the branch and its worktree:
+
+```bash
+# 1. Remove the worktree (safe even if the branch has one)
+git worktree remove <worktree-path>
+
+# 2. Delete the branch (use -d for merged, -D for unmerged-but-discarded)
+git branch -d codex/<branch-name>
+```
+
+- Only delete a branch after confirming its commits are on `main` (or have been
+  intentionally discarded). Use `git branch --merged main` to verify.
+- Never delete `main`, the currently checked-out branch, or any branch with
+  uncommitted work in its worktree.
+- For worktrees with uncommitted changes, `git worktree remove` will refuse
+  unless `--force` is passed; inspect the changes first.
+- For remote-tracking branches that have been merged, also delete the remote
+  ref (`git push origin --delete codex/<branch-name>`) if the branch is no
+  longer needed upstream.
+- Keep the main checkout and any actively-in-use worktrees.

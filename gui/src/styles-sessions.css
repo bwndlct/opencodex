@@ -1,5 +1,10 @@
 .sessions-page { min-width: 0; }
 
+/* Widen the content container for the sessions page only (fork-specific). */
+.main-inner.main-inner--wide {
+  max-width: 1400px;
+}
+
 .sessions-load-error {
   display: flex;
   align-items: center;
@@ -54,7 +59,18 @@
 .sessions-table th:nth-child(4) { width: 12%; }
 .sessions-table th:nth-child(5) { width: 29%; }
 .sessions-table > tbody > tr > td { vertical-align: top; }
-.sessions-table > tbody > tr { min-height: 76px; }
+
+/* Row is fully clickable to toggle the log panel (fork-specific). */
+.sessions-table > tbody > tr.session-clickable {
+  min-height: 76px;
+  cursor: pointer;
+  transition: background var(--motion-fast);
+}
+.sessions-table > tbody > tr.session-clickable:hover { background: var(--accent-soft); }
+.sessions-table > tbody > tr.session-clickable:focus-visible {
+  outline: 2px solid var(--accent, var(--blue));
+  outline-offset: -2px;
+}
 
 .session-name-toggle {
   background: none;
@@ -64,7 +80,6 @@
   font: inherit;
   font-weight: var(--weight-semibold);
   text-align: left;
-  cursor: pointer;
   overflow-wrap: anywhere;
   word-break: break-word;
 }

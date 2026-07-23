@@ -2,8 +2,7 @@ import { baseProviderLabel } from "../providers/label";
 import { usageDisplayTotalTokens } from "./totals";
 import type { PersistedUsageEntry, UsageStatus } from "./log";
 import { estimateComboCost, estimateRequestCost } from "./cost";
-
-export type UsageRange = "7d" | "30d" | "all";
+export type UsageRange = "today" | "7d" | "30d" | "all";
 export type UsageSurface = "all" | "codex" | "claude";
 
 export interface UsageSummaryTotals {
@@ -89,8 +88,15 @@ export interface UsageSummary {
 
 const DAY_MS = 86_400_000;
 
+/** Server-local midnight (00:00) for the supplied epoch-ms `now`. */
+function startOfLocalDay(now: number): number {
+  const d = new Date(now);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
 export function parseRange(input: string | null | undefined): UsageRange {
-  if (input === "7d" || input === "30d" || input === "all") return input;
+  if (input === "today" || input === "7d" || input === "30d" || input === "all") return input;
   return "30d";
 }
 
@@ -100,6 +106,7 @@ export function parseUsageSurface(input: string | null | undefined): UsageSurfac
 }
 
 function rangeWindow(range: UsageRange, now: number): { since: number | null; days: number } {
+  if (range === "today") return { since: startOfLocalDay(now), days: 1 };
   if (range === "7d") return { since: now - 7 * DAY_MS, days: 7 };
   if (range === "30d") return { since: now - 30 * DAY_MS, days: 30 };
   return { since: null, days: 0 };

@@ -17,6 +17,12 @@ import { IconGrid, IconServer, IconBoxes, IconShuffle, IconBot, IconList, IconTe
 import { useI18n, useT, LOCALES, type Locale, type TKey } from "./i18n";
 import { Select } from "./ui";
 import { installApiAuthFetch } from "./api";
+import {
+  isOptionalNavPage,
+  readNavigationVisibility,
+  writeNavigationVisibility,
+  type OptionalNavPage,
+} from "./navigation-preferences";
 
 installApiAuthFetch();
 
@@ -41,7 +47,6 @@ const THEME_KEY = "ocx-theme";
 
 const NAV: { id: Page; tkey: TKey; Icon: typeof IconGrid }[] = [
   { id: "dashboard", tkey: "nav.dashboard", Icon: IconGrid },
-  { id: "settings", tkey: "nav.settings", Icon: IconSliders },
   { id: "sessions", tkey: "nav.sessions", Icon: IconLink },
   { id: "providers", tkey: "nav.providers", Icon: IconServer },
   { id: "models", tkey: "nav.models", Icon: IconBoxes },
@@ -74,6 +79,7 @@ export default function App() {
   const [page, setPageState] = useState<Page>(readPageFromHash);
   const [theme, setTheme] = useState<Theme>(readStoredTheme);
   const [runtimeVersion, setRuntimeVersion] = useState<string | null>(null);
+  const [navigationVisibility, setNavigationVisibility] = useState(readNavigationVisibility);
   const { locale, setLocale } = useI18n();
   const t = useT();
 
@@ -134,9 +140,6 @@ export default function App() {
   const displayedVersion = runtimeVersion ?? __APP_VERSION__;
 
   const [stopping, setStopping] = useState(false);
-  // Sidebar "Claude ON" toggle — literal label in every locale (product name).
-  const [claudeEnabled, setClaudeEnabled] = useState<boolean | null>(null);
-
   useEffect(() => {
     if (!navOpen) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setNavOpen(false); };
@@ -165,29 +168,12 @@ export default function App() {
     return () => mq.removeEventListener("change", onChange);
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    fetch(`${API_BASE}/api/claude-code`)
-      .then(res => res.json())
-      .then(d => { if (!cancelled && typeof d.enabled === "boolean") setClaudeEnabled(d.enabled); })
-      .catch(() => { /* toggle stays hidden until the API answers */ });
-    return () => { cancelled = true; };
-  }, []);
-
-  const toggleClaude = async () => {
-    if (claudeEnabled === null) return;
-    const next = !claudeEnabled;
-    setClaudeEnabled(next); // optimistic
-    try {
-      const res = await fetch(`${API_BASE}/api/claude-code`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled: next }),
-      });
-      if (!res.ok) setClaudeEnabled(!next);
-    } catch {
-      setClaudeEnabled(!next);
-    }
+  const setOptionalNavVisibility = (optionalPage: OptionalNavPage, visible: boolean) => {
+    setNavigationVisibility(current => {
+      const next = { ...current, [optionalPage]: visible };
+      writeNavigationVisibility(next);
+      return next;
+    });
   };
   const handleStop = async () => {
     if (!confirm(t("dash.stopConfirm"))) return;
@@ -228,7 +214,7 @@ export default function App() {
           </button>
         </div>
         <nav>
-          {NAV.map(({ id, tkey, Icon }) => (
+          {NAV.filter(({ id }) => !isOptionalNavPage(id) || navigationVisibility[id]).map(({ id, tkey, Icon }) => (
             <button key={id} className={`nav-item${page === id ? " active" : ""}`} data-page={id}
               onClick={() => { setPageState(id); setNavOpen(false); }}
               aria-current={page === id ? "page" : undefined}>
@@ -237,13 +223,11 @@ export default function App() {
           ))}
         </nav>
         <div className="sidebar-foot">
-          {claudeEnabled !== null && (
-            <button type="button" className="theme-toggle" onClick={toggleClaude}
-              aria-pressed={claudeEnabled} aria-label={t("claude.toggleAria")} title={t("claude.toggleAria")}
-              style={claudeEnabled ? { color: "var(--accent)" } : undefined}>
-              <IconSparkle /> <span className="mode">{claudeEnabled ? t("app.claudeOn") : t("app.claudeOff")}</span>
-            </button>
-          )}
+          <button type="button" className={`nav-item${page === "settings" ? " active" : ""}`} data-page="settings"
+            onClick={() => { setPageState("settings"); setNavOpen(false); }}
+            aria-current={page === "settings" ? "page" : undefined}>
+            <IconSliders /> {t("nav.settings")}
+          </button>
           <div className="lang-toggle">
             <IconGlobe aria-hidden />
             <Select
@@ -272,7 +256,7 @@ export default function App() {
       <main className="main" inert={navOpen}>
         <div className={`main-inner${page === "combos" ? " main-inner--combos" : ""}`}>
           {page === "dashboard" && <Dashboard apiBase={API_BASE} />}
-          {page === "settings" && <Settings apiBase={API_BASE} />}
+          {page === "settings" && <Settings apiBase={API_BASE} navigationVisibility={navigationVisibility} onNavigationVisibilityChange={setOptionalNavVisibility} />}
           {page === "sessions" && <Sessions apiBase={API_BASE} />}
           {page === "providers" && <Providers apiBase={API_BASE} />}
           {page === "models" && <Models apiBase={API_BASE} />}

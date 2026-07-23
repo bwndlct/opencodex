@@ -4,7 +4,7 @@ import { formatTokens } from "../format-tokens";
 import { EmptyState } from "../ui";
 import { modelLabel } from "../model-display";
 
-type Range = "all" | "30d" | "7d";
+type Range = "today" | "7d" | "30d" | "all";
 type UsageSurface = "all" | "codex" | "claude";
 
 interface UsageSummaryTotals {
@@ -239,7 +239,7 @@ function UsageFilters({
         })}
       </div>
       <div className="usage-segmented" role="group" aria-label={t("usage.title")}>
-        {(["all", "30d", "7d"] as Range[]).map(choice => {
+        {(["today", "7d", "30d", "all"] as Range[]).map(choice => {
           const label = t(`usage.range.${choice}`);
           return (
             <button
@@ -549,7 +549,7 @@ function UsageCoveragePanel({ summary, t }: { summary: UsageSummaryTotals; t: TF
 
 export default function Usage({ apiBase }: { apiBase: string }) {
   const { t, locale } = useI18n();
-  const [range, setRange] = useState<Range>("30d");
+  const [range, setRange] = useState<Range>("today");
   const [surface, setSurface] = useState<UsageSurface>("all");
   const [data, setData] = useState<UsageResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -618,7 +618,9 @@ export default function Usage({ apiBase }: { apiBase: string }) {
       ) : (
         <>
           <UsageSummaryCards summary={data.summary} activeDays={activeDays} locale={locale} t={t} />
-          <UsageHeatmapPanel range={range} heatmap={heatmap} weekBars={weekBars} locale={locale} t={t} />
+          {range !== "today" && (
+            <UsageHeatmapPanel range={range} heatmap={heatmap} weekBars={weekBars} locale={locale} t={t} />
+          )}
           <UsageModelsTable models={filteredModels} modelQuery={modelQuery} onModelQuery={setModelQuery} locale={locale} t={t} />
           <UsageProvidersTable providers={sortedProviders} locale={locale} t={t} />
           <UsageCoveragePanel summary={data.summary} t={t} />

@@ -42,10 +42,83 @@ export interface RecentSession {
   requestedEffort?: string;
   effectiveProvider?: string;
   effectiveModel?: string;
+  requestCount?: number;
+  measuredRequests?: number;
+  estimatedRequests?: number;
+  unmeteredRequests?: number;
+  totalTokens?: number;
+}
+
+export type SessionHistoryEntry = RecentSession;
+
+export interface SessionHistoryResponse {
+  generatedAt: number;
+  retentionDays: number;
+  sessions: SessionHistoryEntry[];
+}
+
+export type SessionLogUsageStatus = "reported" | "unreported" | "unsupported" | "estimated";
+
+export interface SessionLogUsage {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens?: number;
+  cachedInputTokens?: number;
+  cacheReadInputTokens?: number;
+  cacheCreationInputTokens?: number;
+  reasoningOutputTokens?: number;
+  estimated?: boolean;
+}
+
+export interface SessionLog {
+  requestId: string;
+  timestamp: number;
+  status: number;
+  durationMs: number;
+  usageStatus: SessionLogUsageStatus;
+  provider: string;
+  model: string;
+  resolvedModel?: string;
+  requestedModel?: string;
+  requestedEffort?: string;
+  executionSessionId?: string;
+  requestKind?: string;
+  subagentKind?: string;
+  isSpawnedChild?: boolean;
+  usage?: SessionLogUsage;
+  totalTokens?: number;
+  errorCode?: string;
+  terminalStatus?: string;
+  closeReason?: string;
+}
+
+export interface SessionLogResponse {
+  rootSessionId: string;
+  retentionDays: number;
+  logs: SessionLog[];
 }
 
 const IDENTITY_VALUE_MAX_LENGTH = 256;
 const DEFAULT_RECENT_SESSION_LIMIT = 20;
+
+function optionalNonNegativeNumber(value: unknown): number | undefined {
+  if (!isFiniteNonNegativeNumber(value)) return undefined;
+  return value;
+}
+
+function isSessionLogUsageStatus(value: unknown): value is SessionLogUsageStatus {
+  return value === "reported" || value === "unreported" || value === "unsupported" || value === "estimated";
+}
+
+/** Token total for a single log row, mirroring server usageDisplayTotalTokens semantics. */
+export function sessionLogTokenTotal(log: SessionLog): number | undefined {
+  if (log.usage) {
+    const baseTotal = log.usage.inputTokens + log.usage.outputTokens;
+    const explicitTotal = log.usage.totalTokens ?? log.totalTokens;
+    return typeof explicitTotal === "number" ? Math.max(explicitTotal, baseTotal) : baseTotal;
+  }
+  return typeof log.totalTokens === "number" ? log.totalTokens : undefined;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -215,6 +288,163 @@ function parseRecentSessionCandidate(value: unknown, sequence: number): RecentSe
   };
 
   return { session, timestamp: value.timestamp, sequence };
+}
+/**
+ * Parse the GET /api/sessions/history response envelope. Required envelope fields are
+ * generatedAt/retentionDays/sessions; each session row reuses the safe-field logic from
+ * parseRecentSessionCandidate but reads history field names (lastSeenAt, requestCount,
+ * measured/estimated/unmetered counts, totalTokens, requestedProvider as a top-level field).
+ */
+function parseHistorySessionCandidate(value: unknown): SessionHistoryEntry | undefined {
+  if (!isRecord(value)) return undefined;
+
+  const rootSessionId = sanitizeIdentityValue(value.rootSessionId);
+  if (!rootSessionId || !isFiniteNonNegativeNumber(value.lastSeenAt)) return undefined;
+
+  const requestedProvider = sanitizeIdentityValue(value.requestedProvider);
+  const requestedModel = sanitizeIdentityValue(value.requestedModel);
+  const effectiveProvider = sanitizeIdentityValue(value.effectiveProvider) ?? sanitizeIdentityValue(value.provider);
+  const effectiveModel = sanitizeIdentityValue(value.effectiveModel) ?? sanitizeIdentityValue(value.resolvedModel);
+
+  const entry: SessionHistoryEntry = {
+    rootSessionId,
+    lastSeenAt: value.lastSeenAt,
+    ...(sanitizeIdentityValue(value.executionSessionId)
+      ? { executionSessionId: sanitizeIdentityValue(value.executionSessionId) }
+      : {}),
+    ...(requestedProvider ? { requestedProvider } : {}),
+    ...(requestedModel ? { requestedModel } : {}),
+    ...(sanitizeIdentityValue(value.requestedEffort) ? { requestedEffort: sanitizeIdentityValue(value.requestedEffort) } : {}),
+    ...(effectiveProvider ? { effectiveProvider } : {}),
+    ...(effectiveModel ? { effectiveModel } : {}),
+  };
+
+  const requestCount = optionalNonNegativeNumber(value.requestCount);
+  if (requestCount !== undefined) entry.requestCount = requestCount;
+  const measuredRequests = optionalNonNegativeNumber(value.measuredRequests);
+  if (measuredRequests !== undefined) entry.measuredRequests = measuredRequests;
+  const estimatedRequests = optionalNonNegativeNumber(value.estimatedRequests);
+  if (estimatedRequests !== undefined) entry.estimatedRequests = estimatedRequests;
+  const unmeteredRequests = optionalNonNegativeNumber(value.unmeteredRequests);
+  if (unmeteredRequests !== undefined) entry.unmeteredRequests = unmeteredRequests;
+  const totalTokens = optionalNonNegativeNumber(value.totalTokens);
+  if (totalTokens !== undefined) entry.totalTokens = totalTokens;
+
+  return entry;
+}
+
+export function parseSessionHistory(value: unknown): SessionHistoryResponse {
+  if (!isRecord(value)) throw new Error("session history must be an object");
+  if (!Array.isArray(value.sessions)) throw new Error("session history.sessions must be an array");
+
+  const sessions: SessionHistoryEntry[] = [];
+  for (const row of value.sessions) {
+    const entry = parseHistorySessionCandidate(row);
+    if (entry) sessions.push(entry);
+  }
+
+  return {
+    generatedAt: requiredNonNegativeNumber(value, "generatedAt", "session history"),
+    retentionDays: optionalNonNegativeNumber(value.retentionDays) ?? 30,
+    sessions,
+  };
+}
+
+function parseSessionLogUsage(value: unknown): SessionLogUsage | undefined {
+  if (!isRecord(value)) return undefined;
+  const inputTokens = value.inputTokens;
+  const outputTokens = value.outputTokens;
+  if (!isFiniteNonNegativeNumber(inputTokens) || !isFiniteNonNegativeNumber(outputTokens)) return undefined;
+
+  const usage: SessionLogUsage = { inputTokens, outputTokens };
+  const totalTokens = optionalNonNegativeNumber(value.totalTokens);
+  if (totalTokens !== undefined) usage.totalTokens = totalTokens;
+  const cachedInputTokens = optionalNonNegativeNumber(value.cachedInputTokens);
+  if (cachedInputTokens !== undefined) usage.cachedInputTokens = cachedInputTokens;
+  const cacheReadInputTokens = optionalNonNegativeNumber(value.cacheReadInputTokens);
+  if (cacheReadInputTokens !== undefined) usage.cacheReadInputTokens = cacheReadInputTokens;
+  const cacheCreationInputTokens = optionalNonNegativeNumber(value.cacheCreationInputTokens);
+  if (cacheCreationInputTokens !== undefined) usage.cacheCreationInputTokens = cacheCreationInputTokens;
+  const reasoningOutputTokens = optionalNonNegativeNumber(value.reasoningOutputTokens);
+  if (reasoningOutputTokens !== undefined) usage.reasoningOutputTokens = reasoningOutputTokens;
+  if (value.estimated === true) usage.estimated = true;
+  return usage;
+}
+
+/**
+ * Parse a single projected log row from GET /api/sessions/{id}/logs. Mirrors the server
+ * SessionLogEntry contract; strips unknown/private fields and validates required fields.
+ */
+function parseSessionLog(value: unknown): SessionLog | undefined {
+  if (!isRecord(value)) return undefined;
+
+  const requestId = sanitizeIdentityValue(value.requestId);
+  if (!requestId) return undefined;
+  if (!isFiniteNonNegativeNumber(value.timestamp)) return undefined;
+  if (!isFiniteNonNegativeNumber(value.status)) return undefined;
+  if (!isFiniteNonNegativeNumber(value.durationMs)) return undefined;
+
+  const usageStatus = value.usageStatus;
+  if (!isSessionLogUsageStatus(usageStatus)) return undefined;
+
+  const provider = sanitizeIdentityValue(value.provider);
+  const model = sanitizeIdentityValue(value.model);
+  if (!provider || !model) return undefined;
+
+  const log: SessionLog = {
+    requestId,
+    timestamp: value.timestamp,
+    status: value.status,
+    durationMs: value.durationMs,
+    usageStatus,
+    provider,
+    model,
+  };
+
+  const resolvedModel = sanitizeIdentityValue(value.resolvedModel);
+  if (resolvedModel) log.resolvedModel = resolvedModel;
+  const requestedModel = sanitizeIdentityValue(value.requestedModel);
+  if (requestedModel) log.requestedModel = requestedModel;
+  const requestedEffort = sanitizeIdentityValue(value.requestedEffort);
+  if (requestedEffort) log.requestedEffort = requestedEffort;
+  const executionSessionId = sanitizeIdentityValue(value.executionSessionId);
+  if (executionSessionId) log.executionSessionId = executionSessionId;
+  const requestKind = sanitizeIdentityValue(value.requestKind);
+  if (requestKind) log.requestKind = requestKind;
+  const subagentKind = sanitizeIdentityValue(value.subagentKind);
+  if (subagentKind) log.subagentKind = subagentKind;
+  if (value.isSpawnedChild === true) log.isSpawnedChild = true;
+
+  const usage = parseSessionLogUsage(value.usage);
+  if (usage) log.usage = usage;
+  const totalTokens = optionalNonNegativeNumber(value.totalTokens);
+  if (totalTokens !== undefined) log.totalTokens = totalTokens;
+  const errorCode = sanitizeIdentityValue(value.errorCode);
+  if (errorCode) log.errorCode = errorCode;
+  const terminalStatus = sanitizeIdentityValue(value.terminalStatus);
+  if (terminalStatus) log.terminalStatus = terminalStatus;
+  const closeReason = sanitizeIdentityValue(value.closeReason);
+  if (closeReason) log.closeReason = closeReason;
+
+  return log;
+}
+
+export function parseSessionLogs(value: unknown): SessionLogResponse {
+  if (!isRecord(value)) throw new Error("session logs must be an object");
+  if (!Array.isArray(value.logs)) throw new Error("session logs.logs must be an array");
+
+  const rootSessionId = sanitizeIdentityValue(value.rootSessionId);
+  const logs: SessionLog[] = [];
+  for (const row of value.logs) {
+    const log = parseSessionLog(row);
+    if (log) logs.push(log);
+  }
+
+  return {
+    rootSessionId: rootSessionId ?? "",
+    retentionDays: optionalNonNegativeNumber(value.retentionDays) ?? 30,
+    logs,
+  };
 }
 
 export function parseRecentSessions(value: unknown, limit = DEFAULT_RECENT_SESSION_LIMIT): RecentSession[] {

@@ -116,6 +116,21 @@ describe("GET /api/usage", () => {
     }
   });
 
+  test("range=today only includes entries from the current local day", async () => {
+    writeFixture(Date.now());
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/usage?range=today", server.url));
+      const body = await res.json();
+      expect(body.range).toBe("today");
+      // The fixture has entries 1d and 10d ago, none today, so today yields zero.
+      expect(body.summary.requests).toBe(0);
+      expect(body.summary.totalTokens).toBe(0);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("default range is 30d and includes the older entry", async () => {
     writeFixture(Date.now());
     const server = startServer(0);

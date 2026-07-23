@@ -21,6 +21,14 @@ import {
   normalizeRootSessionId,
   setSessionRoutePolicy,
 } from "./session-route-policy";
+import {
+  aggregateSessionHistory,
+  buildSessionLogs,
+  parseSessionHistoryLimit,
+  parseSessionLogLimit,
+  SESSION_RETENTION_DAYS,
+  validateSessionId,
+} from "./session-history";
 import { jsonResponse } from "./auth-cors";
 
 // ---------------------------------------------------------------------------
@@ -178,6 +186,7 @@ function parseIncidentQuery(url: URL): IncidentQueryResult {
 
 const SESSION_ROUTE_POLICY_PREFIX = "/api/sessions/";
 const SESSION_ROUTE_POLICY_SUFFIX = "/route-policy";
+const SESSION_LOGS_SUFFIX = "/logs";
 
 type SessionRoutePolicyPathMatch =
   | { matched: false }
@@ -298,6 +307,43 @@ export async function handleForkEndpoints(
       readEntries: deps.readUsageEntries ?? readUsageEntries,
       now: deps.healthNow?.(),
     }), 200, req, config);
+  }
+
+  // ---- /api/sessions/history ----
+  if (url.pathname === "/api/sessions/history" && req.method === "GET") {
+    const limit = parseSessionHistoryLimit(url.searchParams.get("limit"));
+    const now = deps.healthNow?.() ?? Date.now();
+    try {
+      return jsonResponse(aggregateSessionHistory(
+        (deps.readUsageEntries ?? readUsageEntries)(),
+        now,
+        limit,
+      ), 200, req, config);
+    } catch {
+      return jsonResponse({ generatedAt: now, retentionDays: SESSION_RETENTION_DAYS, sessions: [] }, 200, req, config);
+    }
+  }
+
+  // ---- /api/sessions/:id/logs ----
+  if (url.pathname.startsWith(SESSION_ROUTE_POLICY_PREFIX)
+    && url.pathname.endsWith(SESSION_LOGS_SUFFIX)
+    && req.method === "GET") {
+    const encoded = url.pathname.slice(SESSION_ROUTE_POLICY_PREFIX.length, -SESSION_LOGS_SUFFIX.length);
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(encoded);
+    } catch {
+      return jsonResponse({ error: "invalid_session_id" }, 400, req, config);
+    }
+    const rootSessionId = validateSessionId(decoded);
+    if (!rootSessionId) return jsonResponse({ error: "invalid_session_id" }, 400, req, config);
+    const limit = parseSessionLogLimit(url.searchParams.get("limit"));
+    try {
+      const logs = buildSessionLogs((deps.readUsageEntries ?? readUsageEntries)(), rootSessionId, limit);
+      return jsonResponse({ rootSessionId, retentionDays: SESSION_RETENTION_DAYS, logs }, 200, req, config);
+    } catch {
+      return jsonResponse({ rootSessionId, retentionDays: SESSION_RETENTION_DAYS, logs: [] }, 200, req, config);
+    }
   }
 
   // ---- /api/sessions/:id/route-policy ----

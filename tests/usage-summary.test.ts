@@ -23,7 +23,8 @@ function entry(overrides: Partial<PersistedUsageEntry> & { ts: number }): Persis
 }
 
 describe("parseRange", () => {
-  test("accepts 7d / 30d / all", () => {
+  test("accepts today / 7d / 30d / all", () => {
+    expect(parseRange("today")).toBe("today");
     expect(parseRange("7d")).toBe("7d");
     expect(parseRange("30d")).toBe("30d");
     expect(parseRange("all")).toBe("all");
@@ -34,6 +35,42 @@ describe("parseRange", () => {
     expect(parseRange(undefined)).toBe("30d");
     expect(parseRange("90d")).toBe("30d");
     expect(parseRange("")).toBe("30d");
+  });
+});
+
+describe("today range boundary", () => {
+  // `now` at 2026-06-28 12:00 local — using Date constructor to keep local-midnight semantics
+  // consistent with the server's startOfLocalDay implementation.
+  const NOON_LOCAL = new Date(2026, 5, 28, 12, 0, 0).getTime();
+  const MIDNIGHT_LOCAL = new Date(2026, 5, 28, 0, 0, 0, 0).getTime();
+  const ONE_MIN_BEFORE_MIDNIGHT = new Date(2026, 5, 27, 23, 59, 0, 0).getTime();
+
+  test("excludes an entry one minute before local midnight", () => {
+    const entries: PersistedUsageEntry[] = [
+      entry({ ts: ONE_MIN_BEFORE_MIDNIGHT, usageStatus: "reported", usage: { inputTokens: 1, outputTokens: 1 }, totalTokens: 2 }),
+    ];
+    const sum = summarizeUsage(entries, "today", NOON_LOCAL);
+    expect(sum.summary.requests).toBe(0);
+    expect(sum.summary.totalTokens).toBe(0);
+  });
+
+  test("includes an entry exactly at local midnight", () => {
+    const entries: PersistedUsageEntry[] = [
+      entry({ ts: MIDNIGHT_LOCAL, usageStatus: "reported", usage: { inputTokens: 1, outputTokens: 1 }, totalTokens: 2 }),
+    ];
+    const sum = summarizeUsage(entries, "today", NOON_LOCAL);
+    expect(sum.summary.requests).toBe(1);
+    expect(sum.summary.totalTokens).toBe(2);
+  });
+
+  test("includes an entry after midnight and reports since at local-midnight", () => {
+    const entries: PersistedUsageEntry[] = [
+      entry({ ts: NOON_LOCAL, usageStatus: "reported", usage: { inputTokens: 3, outputTokens: 1 }, totalTokens: 4 }),
+    ];
+    const sum = summarizeUsage(entries, "today", NOON_LOCAL);
+    expect(sum.since).toBe(MIDNIGHT_LOCAL);
+    expect(sum.summary.requests).toBe(1);
+    expect(sum.summary.totalTokens).toBe(4);
   });
 });
 

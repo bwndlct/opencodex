@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { IconCheck, IconInfo, IconRefresh } from "../icons";
 import { Notice, Select, Switch } from "../ui";
 import { useT } from "../i18n/shared";
+import NavigationVisibilitySettings from "../components/NavigationVisibilitySettings";
+import type { NavigationVisibility, OptionalNavPage } from "../navigation-preferences";
 
 type RoutePolicy = "personal_first" | "company_first";
 
@@ -64,7 +66,15 @@ function parseModelText(value: string): string[] {
   return [...new Set(value.split(",").map(model => model.trim()).filter(Boolean))];
 }
 
-export default function Settings({ apiBase }: { apiBase: string }) {
+export default function Settings({
+  apiBase,
+  navigationVisibility,
+  onNavigationVisibilityChange,
+}: {
+  apiBase: string;
+  navigationVisibility: NavigationVisibility;
+  onNavigationVisibilityChange: (page: OptionalNavPage, visible: boolean) => void;
+}) {
   const t = useT();
   const [settings, setSettings] = useState<RoutingSettings | null>(null);
   const [loading, setLoading] = useState(true);
@@ -219,6 +229,8 @@ export default function Settings({ apiBase }: { apiBase: string }) {
 
       {notice === "saved" && <Notice tone="ok"><span>{t("settings.routing.saved")}</span></Notice>}
       {notice === "error" && <Notice tone="err"><span>{errorMessage || t("settings.routing.saveError")}</span></Notice>}
+
+      <NavigationVisibilitySettings visibility={navigationVisibility} onChange={onNavigationVisibilityChange} />
 
       <section className="settings-section" aria-labelledby="settings-openai-title">
         <div className="settings-section-heading">

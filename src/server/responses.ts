@@ -89,6 +89,7 @@ import type { RequestRouteObservation } from "./request-activity";
 import { getSessionRoutePolicy, type SessionRoutePolicy } from "./session-route-policy";
 import { isBareOpenAiModel, runOpenAiDualUpstream } from "./openai-dual-upstream";
 import { forceConfiguredReasoningMax } from "./max-reasoning-policy";
+import { resolveRequestCodexAuth, type RequestCodexAuthSelection } from "./request-auth-resolver";
 import {
   consumeForInspection,
   consumeForResponseLogMetadata,
@@ -413,44 +414,8 @@ export function codexLogAccountId(authCtx: CodexAuthContext): string | null {
   return authCtx.kind === "pool" || authCtx.kind === "main-pool" ? authCtx.accountId : null;
 }
 
-export interface RequestCodexAuthSelection {
-  context: CodexAuthContext;
-  mode: CodexAccountMode;
-  routePolicy: SessionRoutePolicy;
-  usedConfiguredFallback: boolean;
-}
-
-function allowsPersonalFirstAuthFallback(error: unknown): boolean {
-  return error instanceof CodexPoolAuthenticationError
-    || error instanceof CodexAuthContextError
-    || error instanceof CodexAccountCooldownError;
-}
-
-export async function resolveRequestCodexAuth(
-  headers: Headers,
-  config: OcxConfig,
-  configuredMode: CodexAccountMode,
-  rootSessionId?: string,
-  excludedAccountIds?: ReadonlySet<string>,
-): Promise<RequestCodexAuthSelection> {
-  const routePolicy = getSessionRoutePolicy(rootSessionId);
-  const personalFirstOverride = routePolicy === "personal_first" && configuredMode === "direct";
-  const initialMode: CodexAccountMode = personalFirstOverride ? "pool" : configuredMode;
-  if (initialMode === "direct") validateForwardAdmissionCredential(headers, config);
-
-  try {
-    const context = await resolveCodexAuthContext(headers, config, initialMode, { rootSessionId, excludedAccountIds });
-    if (isCodexAuthContextUsable(context, config) || !personalFirstOverride) {
-      return { context, mode: initialMode, routePolicy, usedConfiguredFallback: false };
-    }
-  } catch (error) {
-    if (!personalFirstOverride || !allowsPersonalFirstAuthFallback(error)) throw error;
-  }
-
-  validateForwardAdmissionCredential(headers, config);
-  const context = await resolveCodexAuthContext(headers, config, configuredMode, { rootSessionId, excludedAccountIds });
-  return { context, mode: configuredMode, routePolicy, usedConfiguredFallback: true };
-}
+// resolveRequestCodexAuth moved to request-auth-resolver.ts (fork extraction)
+export { resolveRequestCodexAuth, type RequestCodexAuthSelection } from "./request-auth-resolver";
 
 export function usesCodexForwardPoolAuth(
   authCtx: CodexAuthContext,

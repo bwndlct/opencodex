@@ -2,11 +2,26 @@ import { isCodexReasoningEffort } from "./reasoning-effort";
 import type {
   OcxComboConfig,
   OcxConfig,
-  OcxModelRouteOverrideEffort,
-  OcxModelRouteOverrideRule,
-  OcxModelRouteOverrides,
   OcxProviderConfig,
 } from "./types";
+
+export type OcxModelRouteOverrideEffort = "inherit" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+
+export interface OcxModelRouteOverrideRule {
+  /** Target model id: a concrete "<provider>/<model>", bare native model, or "combo/<id>". */
+  target: string;
+  /** Fixed effort to apply, or "inherit" (default) to keep the client's requested effort. */
+  effort?: OcxModelRouteOverrideEffort;
+  /** Per-rule toggle. Default true. */
+  enabled?: boolean;
+}
+
+export interface OcxModelRouteOverrides {
+  /** Global kill-switch. Default false. */
+  enabled?: boolean;
+  /** Source-native-model-keyed override rules. Keys are exact native OpenAI model ids (e.g. "gpt-5.4"). */
+  rules: Record<string, OcxModelRouteOverrideRule>;
+}
 
 export const OVERRIDE_EFFORTS: readonly OcxModelRouteOverrideEffort[] = [
   "inherit", "low", "medium", "high", "xhigh", "max", "ultra",
@@ -93,6 +108,73 @@ export function resolveModelRouteOverride(
       : "inherit";
 
   return { sourceModel, targetModel: target, effort };
+}
+
+/**
+ * Apply a resolved override to a raw request body: rewrite `model` and, when the
+ * effort is a fixed value, set `reasoning.effort`. Returns a deep clone; the
+ * original body is never mutated. Non-object bodies are returned unchanged.
+ */
+export function applyOverrideToBody(
+  body: unknown,
+  override: ModelRouteOverrideResult,
+): unknown {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return body;
+  const clone = structuredClone(body) as Record<string, unknown>;
+  clone.model = override.targetModel;
+  if (!isFixedEffort(override.effort)) return clone;
+  const reasoning = clone.reasoning;
+  if (reasoning && typeof reasoning === "object" && !Array.isArray(reasoning)) {
+    clone.reasoning = { ...(reasoning as Record<string, unknown>), effort: override.effort };
+  } else {
+    clone.reasoning = { effort: override.effort };
+  }
+  return clone;
+}
+
+/**
+ * Apply a resolved override to a parsed request: rewrite `modelId` and the
+ * corresponding `_rawBody.model`, and when the effort is a fixed value, set
+ * `options.reasoning` and the raw body `reasoning.effort`. Mutates `parsed`
+ * in place (mirrors the responses.ts inline logic).
+ */
+export function applyOverrideToParsed(
+  parsed: {
+    modelId: string;
+    options: { reasoning?: string };
+    _rawBody?: Record<string, unknown>;
+  },
+  override: ModelRouteOverrideResult,
+): void {
+  parsed.modelId = override.targetModel;
+  if (parsed._rawBody && typeof parsed._rawBody === "object") {
+    parsed._rawBody.model = override.targetModel;
+  }
+  // Apply fixed effort (dual-write parsed + raw body); "inherit" keeps the client value.
+  if (isFixedEffort(override.effort)) {
+    parsed.options.reasoning = override.effort;
+    const raw = parsed._rawBody as { reasoning?: { effort?: string } } | undefined;
+    if (raw?.reasoning && typeof raw.reasoning === "object") {
+      raw.reasoning.effort = override.effort;
+    } else if (parsed._rawBody && typeof parsed._rawBody === "object") {
+      (parsed._rawBody as { reasoning?: unknown }).reasoning = { effort: override.effort };
+    }
+  }
+}
+
+/**
+ * Record a resolved override on a log context object: set overrideSourceModel,
+ * overrideTargetModel, overrideEffort, and requestedModel (the source model the
+ * client actually asked for). Mutates `logCtx` in place.
+ */
+export function applyOverrideToLogCtx(
+  logCtx: Record<string, unknown>,
+  override: ModelRouteOverrideResult,
+): void {
+  logCtx.overrideSourceModel = override.sourceModel;
+  logCtx.overrideTargetModel = override.targetModel;
+  logCtx.overrideEffort = override.effort;
+  logCtx.requestedModel = override.sourceModel;
 }
 
 export function isOverrideEffort(value: string): value is OcxModelRouteOverrideEffort {

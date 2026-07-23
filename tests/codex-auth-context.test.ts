@@ -85,13 +85,12 @@ const forwardProvider: OcxProviderConfig = {
 describe("Codex auth context", () => {
   test("direct mode returns caller-owned main context without touching pool selection", async () => {
     const cfg = { ...config(), activeCodexAccountId: "missing-pool-account" };
-    await expect(resolveCodexAuthContext(
-      new Headers({ authorization: "Bearer caller", "x-codex-parent-thread-id": "legacy-thread" }),
+   await expect(resolveCodexAuthContext(
+      new Headers({ authorization: "Bearer caller", "x-codex-parent-thread-id": "explicit-root" }),
       cfg,
       "direct",
-      { rootSessionId: "explicit-root" },
-    ))
-      .resolves.toEqual({ kind: "main", accountId: null });
+   ))
+     .resolves.toEqual({ kind: "main", accountId: null });
   });
   test("direct mode fails locally without a caller bearer", async () => {
     await expect(resolveCodexAuthContext(new Headers(), config(), "direct"))
@@ -141,13 +140,12 @@ describe("Codex auth context", () => {
       chatgptAccountId: "pool_acc_b",
     });
 
-    const main = await resolveCodexAuthContext(
-      new Headers({ "x-codex-session-id": "root-session" }),
+   const main = await resolveCodexAuthContext(
+      new Headers({ "x-codex-session-id": "root-session", "x-codex-parent-thread-id": "root-session" }),
       cfg,
       "pool",
-      { rootSessionId: "root-session" },
-    );
-    expect(main).toMatchObject({ accountId: "pool-a" });
+   );
+   expect(main).toMatchObject({ accountId: "pool-a" });
 
     cfg.activeCodexAccountId = "pool-b";
     const legacy = await resolveCodexAuthContext(
@@ -157,16 +155,15 @@ describe("Codex auth context", () => {
     );
     expect(legacy).toMatchObject({ accountId: "pool-b" });
 
-    const explicit = await resolveCodexAuthContext(
-      new Headers({
-        "x-codex-session-id": "child-session",
-        "x-codex-parent-thread-id": "legacy-thread",
-      }),
-      cfg,
-      "pool",
-      { rootSessionId: "root-session" },
-    );
-    expect(explicit).toMatchObject({ accountId: "pool-a" });
+   const explicit = await resolveCodexAuthContext(
+     new Headers({
+       "x-codex-session-id": "child-session",
+        "x-codex-parent-thread-id": "root-session",
+     }),
+     cfg,
+     "pool",
+   );
+   expect(explicit).toMatchObject({ accountId: "pool-a" });
 
     const fallback = await resolveCodexAuthContext(
       new Headers({ "x-codex-parent-thread-id": "legacy-thread" }),
@@ -199,22 +196,20 @@ describe("Codex auth context", () => {
       chatgptAccountId: "pool_acc_b",
     });
 
-    const main = await resolveCodexAuthContext(
-      new Headers({ "x-codex-session-id": "root-session" }),
+   const main = await resolveCodexAuthContext(
+      new Headers({ "x-codex-session-id": "root-session", "x-codex-parent-thread-id": "root-session" }),
       cfg,
       "pool",
-      { rootSessionId: "root-session" },
-    );
-    cfg.activeCodexAccountId = "pool-b";
-    const child = await resolveCodexAuthContext(
-      new Headers({
-        "x-codex-session-id": "child-session",
-        "x-codex-parent-thread-id": "root-session",
-      }),
+   );
+   cfg.activeCodexAccountId = "pool-b";
+   const child = await resolveCodexAuthContext(
+     new Headers({
+       "x-codex-session-id": "child-session",
+       "x-codex-parent-thread-id": "root-session",
+     }),
       cfg,
       "pool",
-      { rootSessionId: "root-session" },
-    );
+   );
 
     expect(main).toMatchObject({ accountId: "pool-a" });
     expect(child).toMatchObject({ accountId: "pool-a" });
@@ -250,7 +245,7 @@ describe("Codex auth context", () => {
     }
 
     const root = "root-session";
-    await resolveCodexAuthContext(new Headers(), cfg, "pool", { rootSessionId: root });
+    await resolveCodexAuthContext(new Headers({ "x-codex-parent-thread-id": root }), cfg, "pool");
     cfg.activeCodexAccountId = "pool-b";
 
     const originalFetch = globalThis.fetch;

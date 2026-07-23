@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
   applyNativeVisibility,
-  buildCodexCatalogEntries,
   disabledNativeSlugs,
   mergeCatalogEntriesForSync,
   NATIVE_OPENAI_MODELS,
   nativeModelRows,
   visibleNativeSlugs,
 } from "../src/codex/catalog";
+import { buildCodexCatalogEntries } from "../src/codex/catalog-projection";
 import { handleManagementAPI } from "../src/server/management-api";
 import type { OcxConfig } from "../src/types";
 

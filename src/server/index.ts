@@ -267,9 +267,10 @@ export function startServer(port?: number) {
         if (!isAllowedRequestOrigin(req, config)) {
           return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, config);
         }
-        const goModels = await fetchAllModels(config);
-        const { buildCodexCatalogEntries, filterCatalogVisibleModels, orderForSubagents, visibleNativeSlugs } = await import("../codex/catalog");
-        const goOrdered = orderForSubagents(filterCatalogVisibleModels(goModels, config), config.subagentModels);
+       const goModels = await fetchAllModels(config);
+        const { filterCatalogVisibleModels, orderForSubagents, visibleNativeSlugs } = await import("../codex/catalog");
+        const { buildCodexCatalogEntries } = await import("../codex/catalog-projection");
+       const goOrdered = orderForSubagents(filterCatalogVisibleModels(goModels, config), config.subagentModels);
         // Claude Code / Claude Desktop gateway model discovery (GET /v1/models with
         // Anthropic-style headers; 003 G1-G8 + devlog 131). Entries use the official
         // ModelInfo shape incl. capabilities (effort ladder / thinking) — Desktop 3P can

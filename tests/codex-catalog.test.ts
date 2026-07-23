@@ -1,3 +1,4 @@
+import { filterSlugsWithHidden } from "../src/codex/catalog-projection";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1688,6 +1689,7 @@ describe("OpenAI API trusted catalog augmentation", () => {
 });
 
 describe("native slug allowlist", () => {
+
   test("can retain supported hidden natives for the catalog-shaped projection", () => {
     const liveModels = [
       { slug: "gpt-5.5", visibility: "hide" },
@@ -1696,7 +1698,7 @@ describe("native slug allowlist", () => {
       { slug: "gpt-5.2", visibility: "hide" },
     ];
 
-    expect(filterSupportedNativeSlugs(liveModels, true)).toEqual([
+    expect(filterSlugsWithHidden(liveModels)).toEqual([
       "gpt-5.5", "gpt-5.4", "gpt-5.6-luna",
     ]);
     expect(filterSupportedNativeSlugs(liveModels)).toEqual(["gpt-5.6-luna"]);

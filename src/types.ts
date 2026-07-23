@@ -1,3 +1,5 @@
+import type { OcxModelRouteOverrides } from "./model-route-overrides";
+
 export interface OcxParsedRequest {
   modelId: string;
   previousResponseId?: string;
@@ -525,24 +527,6 @@ export interface OcxComboConfig {
   stickyLimit?: number;
   /** Used when the client omits reasoning.effort. Default medium. */
   defaultEffort?: OcxComboDefaultEffort;
-}
-
-export type OcxModelRouteOverrideEffort = "inherit" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
-
-export interface OcxModelRouteOverrideRule {
-  /** Target model id: a concrete "<provider>/<model>", bare native model, or "combo/<id>". */
-  target: string;
-  /** Fixed effort to apply, or "inherit" (default) to keep the client's requested effort. */
-  effort?: OcxModelRouteOverrideEffort;
-  /** Per-rule toggle. Default true. */
-  enabled?: boolean;
-}
-
-export interface OcxModelRouteOverrides {
-  /** Global kill-switch. Default false. */
-  enabled?: boolean;
-  /** Source-native-model-keyed override rules. Keys are exact native OpenAI model ids (e.g. "gpt-5.4"). */
-  rules: Record<string, OcxModelRouteOverrideRule>;
 }
 
 /**

@@ -1,17 +1,22 @@
-import {
-  appendFileSync,
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  unlinkSync,
-} from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { getConfigDir } from "../config";
 import { usageDisplayTotalTokens } from "./totals";
 import type { OcxUsage } from "../types";
-import { sanitizeIdentityValue } from "../server/request-identity";
+import { sanitizeAndProjectIdentity } from "../server/log-field-projection";
+import {
+  USAGE_RETENTION_DAYS,
+  legacyUsageLogPath,
+  localDateBefore,
+  pruneUsageShards,
+  readUsageFile,
+  recognizedShardDate,
+  usageDirPath,
+  usageLogPath,
+  type UsageLogNow,
+} from "./retention";
+
+// Re-export for external consumers that still import from usage/log.
+export { usageLogPath, type UsageLogNow };
 
 export type UsageStatus = "reported" | "unreported" | "unsupported" | "estimated";
 
@@ -73,60 +78,6 @@ export interface PersistedUsageEntry {
   closeReason?: "terminal" | "client_cancel" | "non_stream" | "body_stall" | "body_overflow";
   /** Already redacted + capped at capture (request-log.ts redactSecretString().slice(0,500)). */
   upstreamError?: string;
-}
-
-type UsageLogNow = Date | number;
-
-const USAGE_RETENTION_DAYS = 30;
-const USAGE_SHARD_NAME = /^(\d{4}-\d{2}-\d{2})\.jsonl$/;
-const lastPrunedUsageDay = new Map<string, string>();
-
-function usageDirPath(): string {
-  return join(getConfigDir(), "usage");
-}
-
-function legacyUsageLogPath(): string {
-  return join(getConfigDir(), "usage.jsonl");
-}
-
-function normalizedUsageDate(now: UsageLogNow): Date {
-  const date = now instanceof Date ? new Date(now.getTime()) : new Date(now);
-  return Number.isNaN(date.getTime()) ? new Date() : date;
-}
-
-function localDateKey(now: UsageLogNow): string {
-  const date = normalizedUsageDate(now);
-  return [
-    date.getFullYear().toString().padStart(4, "0"),
-    (date.getMonth() + 1).toString().padStart(2, "0"),
-    date.getDate().toString().padStart(2, "0"),
-  ].join("-");
-}
-
-function localDateBefore(now: UsageLogNow, days: number): string {
-  const date = normalizedUsageDate(now);
-  date.setDate(date.getDate() - days);
-  return localDateKey(date);
-}
-
-function recognizedShardDate(fileName: string): string | undefined {
-  const match = USAGE_SHARD_NAME.exec(fileName);
-  if (!match) return undefined;
-  const date = new Date(
-    Number(match[1].slice(0, 4)),
-    Number(match[1].slice(5, 7)) - 1,
-    Number(match[1].slice(8, 10)),
-  );
-  if (date.getFullYear() !== Number(match[1].slice(0, 4))
-    || date.getMonth() !== Number(match[1].slice(5, 7)) - 1
-    || date.getDate() !== Number(match[1].slice(8, 10))) {
-    return undefined;
-  }
-  return match[1];
-}
-
-export function usageLogPath(now: UsageLogNow = Date.now()): string {
-  return join(usageDirPath(), `${localDateKey(now)}.jsonl`);
 }
 
 export function usageTotalTokens(usage: OcxUsage | undefined): number | undefined {
@@ -268,33 +219,13 @@ function normalizedAttempts(raw: unknown): PersistedUsageAttempt[] {
 
 function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   const attempts = normalizedAttempts(entry.attempts);
-  const executionSessionId = sanitizeIdentityValue(entry.executionSessionId);
-  const parentThreadId = sanitizeIdentityValue(entry.parentThreadId);
-  const rootSessionId = sanitizeIdentityValue(entry.rootSessionId);
-  const requestKind = sanitizeIdentityValue(entry.requestKind);
-  const subagentKind = sanitizeIdentityValue(entry.subagentKind);
-  const requestedModel = sanitizeIdentityValue(entry.requestedModel);
-  const requestedEffort = sanitizeIdentityValue(entry.requestedEffort);
-  const overrideSourceModel = sanitizeIdentityValue(entry.overrideSourceModel);
-  const overrideTargetModel = sanitizeIdentityValue(entry.overrideTargetModel);
   return {
     requestId: entry.requestId,
     timestamp: entry.timestamp,
     provider: entry.provider,
     model: entry.model,
     ...(entry.surface === "claude" ? { surface: entry.surface } : {}),
-    ...(executionSessionId ? { executionSessionId } : {}),
-    ...(parentThreadId ? { parentThreadId } : {}),
-    ...(rootSessionId ? { rootSessionId } : {}),
-    ...(requestKind ? { requestKind } : {}),
-    ...(subagentKind ? { subagentKind } : {}),
-    ...(typeof entry.isSpawnedChild === "boolean" ? { isSpawnedChild: entry.isSpawnedChild } : {}),
-    ...(entry.resolvedModel ? { resolvedModel: entry.resolvedModel } : {}),
-    ...(requestedModel ? { requestedModel } : {}),
-    ...(requestedEffort ? { requestedEffort } : {}),
-    ...(overrideSourceModel ? { overrideSourceModel } : {}),
-    ...(overrideTargetModel ? { overrideTargetModel } : {}),
-    ...(entry.overrideEffort ? { overrideEffort: entry.overrideEffort } : {}),
+    ...sanitizeAndProjectIdentity(entry),
     status: entry.status,
     durationMs: entry.durationMs,
     ...(isNonNegativeFiniteNumber(entry.firstOutputMs)
@@ -317,43 +248,6 @@ function ensureUsageLogDir(): void {
   try { chmodSync(dir, 0o700); } catch { /* best-effort on platforms that ignore chmod */ }
 }
 
-function pruneUsageShards(now: UsageLogNow): void {
-  const dir = usageDirPath();
-  if (!existsSync(dir)) return;
-  const localDate = localDateKey(now);
-  if (lastPrunedUsageDay.get(dir) === localDate) return;
-  lastPrunedUsageDay.set(dir, localDate);
-
-  const cutoff = localDateBefore(now, USAGE_RETENTION_DAYS);
-  let entries;
-  try {
-    entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
-    if (!entry.isFile()) continue;
-    const shardDate = recognizedShardDate(entry.name);
-    if (!shardDate || shardDate >= cutoff) continue;
-    try { unlinkSync(join(dir, entry.name)); } catch { /* best-effort retention */ }
-  }
-}
-
-function readUsageFile(path: string, entries: PersistedUsageEntry[]): void {
-  const lines = readFileSync(path, "utf-8").split(/\r?\n/);
-  for (const line of lines) {
-    if (!line.trim()) continue;
-    try {
-      const parsed = JSON.parse(line) as PersistedUsageEntry;
-      if (parsed && typeof parsed === "object" && typeof parsed.requestId === "string") {
-        entries.push(normalizeUsageEntry(parsed));
-      }
-    } catch {
-      /* keep reading after a partially written or hand-edited line */
-    }
-  }
-}
-
 export function appendUsageEntry(entry: PersistedUsageEntry, now: UsageLogNow = Date.now()): void {
   ensureUsageLogDir();
   pruneUsageShards(now);
@@ -366,7 +260,7 @@ export function readUsageEntries(now: UsageLogNow = Date.now()): PersistedUsageE
   pruneUsageShards(now);
   const entries: PersistedUsageEntry[] = [];
   const legacyPath = legacyUsageLogPath();
-  if (existsSync(legacyPath)) readUsageFile(legacyPath, entries);
+  if (existsSync(legacyPath)) readUsageFile(legacyPath, entries, normalizeUsageEntry);
 
   const cutoff = localDateBefore(now, USAGE_RETENTION_DAYS);
   let directoryEntries;
@@ -384,7 +278,7 @@ export function readUsageEntries(now: UsageLogNow = Date.now()): PersistedUsageE
     ))
     .sort((left, right) => left.date.localeCompare(right.date));
   for (const shard of shardFiles) {
-    try { readUsageFile(join(usageDirPath(), shard.name), entries); } catch { /* best-effort shard reads */ }
+    try { readUsageFile(join(usageDirPath(), shard.name), entries, normalizeUsageEntry); } catch { /* best-effort shard reads */ }
   }
   return entries;
 }

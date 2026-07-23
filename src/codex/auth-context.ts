@@ -39,11 +39,6 @@ export type OcxRuntimeProviderConfig = OcxProviderConfig & {
   _codexAccountRequired?: boolean;
 };
 
-export interface ResolveCodexAuthContextOptions {
-  rootSessionId?: string;
-  excludedAccountIds?: ReadonlySet<string>;
-}
-
 export class CodexAuthContextError extends Error {
   accountId: string;
 
@@ -102,15 +97,15 @@ export async function resolveCodexAuthContext(
   headers: Headers,
   config: OcxConfig,
   mode: CodexAccountMode,
-  options: ResolveCodexAuthContextOptions = {},
+  excludedAccountIds?: ReadonlySet<string>,
 ): Promise<CodexAuthContext> {
   if (mode === "direct") {
     if (!hasCallerCodexBearer(headers)) throw new CodexDirectAuthenticationError();
     return { kind: "main", accountId: null };
   }
-  const threadId = options.rootSessionId ?? headers.get("x-codex-parent-thread-id");
-  const resolution = options.excludedAccountIds?.size
-    ? resolveAlternateCodexAccountForThread(threadId, config, options.excludedAccountIds)
+  const threadId = headers.get("x-codex-parent-thread-id");
+  const resolution = excludedAccountIds?.size
+    ? resolveAlternateCodexAccountForThread(threadId, config, excludedAccountIds)
     : resolveCodexAccountForThreadDetailed(threadId, config);
   if (resolution.status === "expired") throw new CodexThreadAffinityExpiredError(resolution.accountId);
   const accountId = resolution.status === "selected" ? resolution.accountId : null;

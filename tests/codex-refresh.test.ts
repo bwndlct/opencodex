@@ -11,16 +11,13 @@ const config = {
 describe("Codex catalog refresh", () => {
   test("writes an expired Codex models cache whenever the materialized catalog exists", async () => {
     let invalidated = 0;
-    let cachedModels: readonly Record<string, unknown>[] | undefined;
     const result = await refreshCodexModelCatalog(config, {
       syncCatalogModels: async () => ({
         added: 0,
         path: "/tmp/opencodex-catalog.json",
-        cacheModels: [{ slug: "gpt-5.6-luna", visibility: "list" }],
       }),
-      invalidateCodexModelsCache: models => {
+      invalidateCodexModelsCache: () => {
         invalidated += 1;
-        cachedModels = models;
       },
       existsSync: () => true,
     });
@@ -32,7 +29,6 @@ describe("Codex catalog refresh", () => {
       cacheSynced: true,
     });
     expect(invalidated).toBe(1);
-    expect(cachedModels).toEqual([{ slug: "gpt-5.6-luna", visibility: "list" }]);
   });
 
   test("does not touch the cache when no Codex catalog can be materialized", async () => {

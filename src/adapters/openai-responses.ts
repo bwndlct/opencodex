@@ -1,4 +1,4 @@
-import type { IncomingMeta, ProviderAdapter } from "./base";
+import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "./base";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../types";
 import { decodeCompactionSummary, SUMMARY_PREFIX } from "../responses/compaction";
 import { OCX_REASONING_PREFIX } from "../responses/reasoning-envelope";
@@ -424,12 +424,53 @@ function stripUnsupportedHostedTools(body: unknown): unknown {
   return tools.length === body.tools.length ? body : { ...body, tools };
 }
 
+/**
+ * Apply the shared Responses serialization pipeline — compaction scrub, reasoning/content
+ * sanitization, hosted-tool stripping, and item-id normalization — and return the JSON string.
+ * Forward, key, and passthrough modes all funnel their body through this ladder.
+ */
+function serializeResponsesBody(body: unknown): string {
+  return JSON.stringify(
+    stripSparkCompatibility(
+      stripUnsupportedReasoningParams(
+        stripItemIdsWhenUnstored(
+          stripInvalidItemIds(
+            stripUnsupportedHostedTools(
+              sanitizeReasoningInputContent(scrubOcxCompactionItems(body))))))));
+}
+
+/**
+ * Build the upstream request for company "passthrough" auth: target the Responses path,
+ * relay caller credentials/metadata via {@link copyPassthroughHeaders}, and preserve the raw
+ * body verbatim — no previous-response-id stripping, orphan repair, or hosted-tool conflict
+ * removal, since the company relay owns those semantics.
+ */
+function buildPassthroughRequest(
+  provider: OcxProviderConfig,
+  parsed: OcxParsedRequest,
+  incoming?: IncomingMeta,
+): AdapterRequest {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (provider.headers) Object.assign(headers, provider.headers);
+  const forwarded = new Headers();
+  copyPassthroughHeaders(forwarded, incoming?.headers);
+  for (const [name, value] of forwarded) headers[name] = value;
+  return {
+    url: `${provider.baseUrl.replace(/\/+$/, "")}/responses`,
+    method: "POST",
+    headers,
+    body: serializeResponsesBody(parsed._rawBody),
+  };
+}
+
 export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): ProviderAdapter & { passthrough: true } {
   return {
     name: "openai-responses",
     passthrough: true as const,
 
     buildRequest(parsed: OcxParsedRequest, incoming?: IncomingMeta) {
+      if (provider.authMode === "passthrough") return buildPassthroughRequest(provider, parsed, incoming);
+
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       let url: string;
 
@@ -453,12 +494,6 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
           headers["authorization"] = `Bearer ${override.accessToken}`;
           headers["chatgpt-account-id"] = override.chatgptAccountId;
         }
-      } else if (provider.authMode === "passthrough") {
-        url = `${provider.baseUrl.replace(/\/+$/, "")}/responses`;
-        if (provider.headers) Object.assign(headers, provider.headers);
-        const forwarded = new Headers();
-        copyPassthroughHeaders(forwarded, incoming?.headers);
-        for (const [name, value] of forwarded) headers[name] = value;
       } else {
         const base = provider.baseUrl.replace(/\/v1\/?$/, "");
         url = `${base}/v1/responses`;
@@ -467,18 +502,15 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       }
 
       const forward = provider.authMode === "forward";
-      const passthrough = provider.authMode === "passthrough";
       const unexpandedMiss = !!parsed.previousResponseId && parsed._previousResponseInputExpanded !== true;
-      let outBody = passthrough
-        ? parsed._rawBody
-        : stripPreviousResponseId(parsed._rawBody, forward || parsed._previousResponseInputExpanded === true);
+      let outBody = stripPreviousResponseId(parsed._rawBody, forward || parsed._previousResponseInputExpanded === true);
       if (forward) outBody = repairOrphanedInputItems(outBody, unexpandedMiss);
-      else if (!passthrough) outBody = stripConflictingHostedTools(outBody);
+      else outBody = stripConflictingHostedTools(outBody);
       return {
         url,
         method: "POST",
         headers,
-        body: JSON.stringify(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody)))))))),
+        body: serializeResponsesBody(outBody),
       };
     },
 

@@ -254,7 +254,7 @@ export default function App() {
       </aside>
 
       <main className="main" inert={navOpen}>
-        <div className={`main-inner${page === "combos" ? " main-inner--combos" : ""}`}>
+        <div className={`main-inner${page === "combos" ? " main-inner--combos" : ""}${page === "sessions" ? " main-inner--wide" : ""}`}>
           {page === "dashboard" && <Dashboard apiBase={API_BASE} />}
           {page === "settings" && <Settings apiBase={API_BASE} navigationVisibility={navigationVisibility} onNavigationVisibilityChange={setOptionalNavVisibility} />}
           {page === "sessions" && <Sessions apiBase={API_BASE} />}

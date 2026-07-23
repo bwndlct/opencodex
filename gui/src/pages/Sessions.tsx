@@ -116,7 +116,12 @@ function PolicyControl({
 }) {
   return (
     <div className="session-policy-cell">
-      <div className="usage-segmented session-policy-control" role="group" aria-label={t("sessions.policy.aria")}>
+      <div
+        className="usage-segmented session-policy-control"
+        role="group"
+        aria-label={t("sessions.policy.aria")}
+        onClick={e => e.stopPropagation()}
+      >
         {(["inherit", "personal_first", "company_first"] as const).map(policy => (
           <button
             key={policy}
@@ -171,20 +176,20 @@ function ActiveSessionRow({
   const tokens = tokenDisplay(totalTokens, estimatedRequests, unmeteredRequests, measuredRequests, locale, t);
   return (
     <Fragment>
-      <tr>
+      <tr
+        className="session-clickable"
+        onClick={() => onToggle(session.rootSessionId)}
+        onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(session.rootSessionId); } }}
+        tabIndex={0}
+        role="button"
+        aria-expanded={expanded}
+      >
       <td className="session-id-cell">
         <div className="session-id-line">
           <span className="dot dot-green" aria-hidden="true" />
-          <button
-            type="button"
-            className="session-name-toggle"
-            aria-expanded={expanded}
-            aria-label={`${expanded ? t("sessions.collapseLogs") : t("sessions.expandLogs")}: ${session.threadName ?? session.rootSessionId}`}
-            title={expanded ? t("sessions.collapseLogs") : t("sessions.expandLogs")}
-            onClick={() => onToggle(session.rootSessionId)}
-          >
+          <span className="session-name-toggle">
             {session.threadName ?? session.rootSessionId}
-          </button>
+          </span>
         </div>
         <span className="session-meta">{t("sessions.started")} {formatAge(session.oldestStartedAt, now, t)}</span>
       </td>
@@ -248,20 +253,20 @@ function RecentSessionRow({
   );
   return (
     <Fragment>
-      <tr>
+      <tr
+        className="session-clickable"
+        onClick={() => onToggle(session.rootSessionId)}
+        onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(session.rootSessionId); } }}
+        tabIndex={0}
+        role="button"
+        aria-expanded={expanded}
+      >
       <td className="session-id-cell">
         <div className="session-id-line">
           <span className="dot session-dot-idle" aria-hidden="true" />
-          <button
-            type="button"
-            className="session-name-toggle"
-            aria-expanded={expanded}
-            aria-label={`${expanded ? t("sessions.collapseLogs") : t("sessions.expandLogs")}: ${session.threadName ?? session.rootSessionId}`}
-            title={expanded ? t("sessions.collapseLogs") : t("sessions.expandLogs")}
-            onClick={() => onToggle(session.rootSessionId)}
-          >
+          <span className="session-name-toggle">
             {session.threadName ?? session.rootSessionId}
-          </button>
+          </span>
         </div>
         <span className="session-meta">{t("sessions.lastSeen")} {formatTime(session.lastSeenAt, locale)}</span>
       </td>

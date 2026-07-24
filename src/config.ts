@@ -505,11 +505,14 @@ const configSchema = z.object({
         path: ["openAiDualUpstream", "companyProvider"],
         message: "companyProvider must reference a configured provider other than openai",
       });
-    } else if (company.adapter !== "openai-responses" || company.authMode !== "passthrough") {
+    } else if (
+      company.adapter !== "openai-responses"
+      || (company.authMode !== "passthrough" && company.authMode !== "key")
+    ) {
       ctx.addIssue({
         code: "custom",
         path: ["openAiDualUpstream", "companyProvider"],
-        message: "companyProvider must use the openai-responses adapter with authMode passthrough",
+        message: "companyProvider must use the openai-responses adapter with authMode passthrough or key",
       });
     }
     const personal = config.providers.openai;

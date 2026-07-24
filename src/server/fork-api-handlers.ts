@@ -9,6 +9,11 @@ import {
   isStringRecord,
 } from "../model-route-overrides";
 import { snapshotDrainState } from "./lifecycle";
+import {
+  classifyOpenAiSecondarySource,
+  effectiveOpenAiAutoSwitch,
+  effectiveOpenAiRoutePolicy,
+} from "./openai-dual-upstream";
 import { IncidentHistory, DEFAULT_INCIDENT_LIMIT, MAX_INCIDENT_LIMIT } from "./incidents";
 import { buildHealthReport } from "./health";
 import { getRequestLogEntries } from "./request-log";
@@ -56,7 +61,19 @@ function isPlainRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-function routingCompanyProviders(config: OcxConfig): string[] {
+/**
+ * Enabled non-openai openai-responses providers classified as api_key_ready
+ * (authMode=key with a resolved nonblank active apiKey). These are the only
+ * providers eligible for new dual-upstream selection.
+ */
+function routingApiKeyProviders(config: OcxConfig): string[] {
+  return Object.keys(config.providers)
+    .filter(name => name !== "openai"
+      && classifyOpenAiSecondarySource(config, name) === "api_key_ready")
+    .sort();
+}
+
+function routingLegacyCompanyProviders(config: OcxConfig): string[] {
   return Object.entries(config.providers)
     .filter(([name, provider]) => name !== "openai"
       && provider.disabled !== true
@@ -68,19 +85,23 @@ function routingCompanyProviders(config: OcxConfig): string[] {
 
 function routingSettingsDTO(config: OcxConfig): Record<string, unknown> {
   const dual = config.openAiDualUpstream;
-  const companyProviders = routingCompanyProviders(config);
+  const apiKeyProviders = routingApiKeyProviders(config);
+  const companyProviders = routingLegacyCompanyProviders(config);
   return {
     openAiDualUpstream: dual ? {
       companyProvider: dual.companyProvider,
-      defaultPolicy: dual.defaultPolicy ?? "company_first",
-      autoSwitchToCompany: dual.autoSwitchToCompany !== false,
+      defaultPolicy: effectiveOpenAiRoutePolicy(config, "inherit"),
+      autoSwitchToCompany: effectiveOpenAiAutoSwitch(config),
+      secondarySourceKind: classifyOpenAiSecondarySource(config, dual.companyProvider),
     } : null,
+    apiKeyProviders,
+    // Compatibility field: older consumers expect the legacy passthrough list here.
     companyProviders,
     canEnableDualUpstream: Boolean(
       config.providers.openai
       && config.providers.openai.disabled !== true
       && isCanonicalOpenAiForwardProvider(config.providers.openai)
-      && companyProviders.length > 0,
+      && apiKeyProviders.length > 0,
     ),
     lunaReasoningMaxModels: config.lunaReasoningMaxModels ?? DEFAULT_ROUTING_LUNA_MODELS,
     glmReasoningMaxModels: config.glmReasoningMaxModels ?? DEFAULT_ROUTING_GLM_MODELS,
@@ -134,13 +155,43 @@ function routingDualConfigError(config: OcxConfig, value: unknown): string | nul
   if (!personal || personal.disabled === true || !isCanonicalOpenAiForwardProvider(personal)) {
     return "dual upstream requires the canonical personal openai provider";
   }
-  const company = config.providers[value.companyProvider];
-  if (!company || company.disabled === true || value.companyProvider === "openai") {
-    return "openAiDualUpstream.companyProvider must reference an existing company provider";
+  const kind = classifyOpenAiSecondarySource(config, value.companyProvider);
+  const current = config.openAiDualUpstream;
+  const sameProvider = !!current && current.companyProvider === value.companyProvider;
+
+  if (kind === "invalid") {
+    return "openAiDualUpstream.companyProvider must reference an enabled openai-responses provider";
   }
-  if (company.adapter !== "openai-responses" || company.authMode !== "passthrough") {
-    return "companyProvider must use the openai-responses adapter with authMode passthrough";
+
+  // Existing legacy passthrough selection may be preserved exactly so that
+  // unrelated Luna/GLM settings can be saved in the same PUT. It may be
+  // disabled (null) or replaced with a ready API key provider, but its routing
+  // fields cannot be changed and legacy passthrough cannot be newly selected.
+  if (sameProvider && kind === "legacy_passthrough") {
+    if (value.defaultPolicy !== undefined
+      && value.defaultPolicy !== (current!.defaultPolicy ?? "company_first")) {
+      return "legacy passthrough routing fields cannot be changed; disable or replace with an API key provider";
+    }
+    if (value.autoSwitchToCompany !== undefined
+      && value.autoSwitchToCompany !== (current!.autoSwitchToCompany ?? true)) {
+      return "legacy passthrough routing fields cannot be changed; disable or replace with an API key provider";
+    }
+    return null;
   }
+
+  if (kind === "legacy_passthrough") {
+    return "legacy passthrough providers cannot be newly selected for dual upstream";
+  }
+
+  if (kind === "api_key_unavailable") {
+    return "openAiDualUpstream.companyProvider requires a resolved API key";
+  }
+
+  if (value.autoSwitchToCompany === true) {
+    return "API Key source routing does not support permanent automatic priority changes";
+  }
+
+  // kind === "api_key_ready" — valid for both new and existing selection.
   return null;
 }
 
@@ -252,21 +303,40 @@ export async function handleForkEndpoints(
 
     const nextConfig: OcxConfig = { ...config };
     if (Object.hasOwn(body, "openAiDualUpstream")) {
-      if (body.openAiDualUpstream === null) delete nextConfig.openAiDualUpstream;
-      else if (isPlainRecord(body.openAiDualUpstream)) {
+      if (body.openAiDualUpstream === null) {
+        delete nextConfig.openAiDualUpstream;
+      } else if (isPlainRecord(body.openAiDualUpstream)) {
+        const dualValue = body.openAiDualUpstream;
         const current = config.openAiDualUpstream;
-        const companyProvider = body.openAiDualUpstream.companyProvider;
-        const defaultPolicy = body.openAiDualUpstream.defaultPolicy;
-        const autoSwitchToCompany = body.openAiDualUpstream.autoSwitchToCompany;
-        nextConfig.openAiDualUpstream = {
-          companyProvider: typeof companyProvider === "string" ? companyProvider : current?.companyProvider ?? "",
-          defaultPolicy: defaultPolicy === undefined
-            ? current?.defaultPolicy ?? "company_first"
-            : isRoutingPolicy(defaultPolicy) ? defaultPolicy : current?.defaultPolicy ?? "company_first",
-          autoSwitchToCompany: autoSwitchToCompany === undefined
-            ? current?.autoSwitchToCompany ?? true
-            : typeof autoSwitchToCompany === "boolean" ? autoSwitchToCompany : current?.autoSwitchToCompany ?? true,
-        };
+        const providerName = dualValue.companyProvider;
+        const sameProvider = !!current
+          && typeof providerName === "string"
+          && current.companyProvider === providerName;
+        const currentKind = current
+          ? classifyOpenAiSecondarySource(config, current.companyProvider)
+          : null;
+        const preserveLegacy = sameProvider && currentKind === "legacy_passthrough";
+
+        if (preserveLegacy) {
+          // Preserve the existing legacy passthrough config exactly.
+          nextConfig.openAiDualUpstream = { ...current! };
+        } else {
+          // New or changed API-key source. Omitted defaults become
+          // personal_first and false; persisted config stores both explicitly.
+          // For same-provider updates, omitted fields fall back to current.
+          const fallbackPolicy = sameProvider
+            ? (current!.defaultPolicy ?? "personal_first")
+            : "personal_first";
+          nextConfig.openAiDualUpstream = {
+            companyProvider: typeof providerName === "string"
+              ? providerName
+              : current?.companyProvider ?? "",
+            defaultPolicy: dualValue.defaultPolicy === undefined
+              ? fallbackPolicy
+              : isRoutingPolicy(dualValue.defaultPolicy) ? dualValue.defaultPolicy : fallbackPolicy,
+            autoSwitchToCompany: false,
+          };
+        }
       }
     }
     if (luna.models !== undefined) nextConfig.lunaReasoningMaxModels = luna.models;

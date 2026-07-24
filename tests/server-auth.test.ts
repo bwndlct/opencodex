@@ -2788,3 +2788,99 @@ describe("server local API auth", () => {
     }
   });
 });
+
+describe("Account vs API Key dual-upstream routing", () => {
+  test("company_first with API-key company provider uses only the provider key on both responses and compact", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    clearThreadAccountMap();
+    clearCodexUpstreamHealth();
+    clearAccountNeedsReauth("pool-a");
+
+    const seen: Array<{ path: string; authorization: string | null; accountId: string | null }> = [];
+    const upstream = Bun.serve({
+      port: 0,
+      fetch(req) {
+        seen.push({
+          path: new URL(req.url).pathname,
+          authorization: req.headers.get("authorization"),
+          accountId: req.headers.get("chatgpt-account-id"),
+        });
+        return Response.json({
+          id: "resp-key",
+          object: "response",
+          status: "completed",
+          model: "gpt-5.5",
+          output: [],
+          usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+        });
+      },
+    });
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      return originalGlobalFetch(new URL(url.replace(upstream.hostname, "127.0.0.1"), upstream.url.origin), init);
+    }) as typeof fetch;
+
+    saveConfig({
+      port: 0,
+      hostname: "127.0.0.1",
+      defaultProvider: "openai",
+      openaiProviderTierVersion: 2,
+      providers: {
+        openai: { ...canonicalDirect, codexAccountMode: "pool" },
+        company: {
+          adapter: "openai-responses",
+          baseUrl: `${upstream.url.origin}/v1`,
+          authMode: "key",
+          apiKey: "sk-company-key",
+          allowPrivateNetwork: true,
+        },
+      },
+      codexAccounts: [{ id: "pool-a", email: "a@example.test", isMain: false, chatgptAccountId: "acct-pool-a" }],
+      activeCodexAccountId: "pool-a",
+      autoSwitchThreshold: 0,
+      openAiDualUpstream: { companyProvider: "company", defaultPolicy: "company_first" },
+    } as OcxConfig);
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "pool-access-token",
+      refreshToken: "pool-refresh-token",
+      expiresAt: Date.now() + 300_000,
+      chatgptAccountId: "acct-pool-a",
+    });
+
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: "Bearer caller-secret",
+          "chatgpt-account-id": "caller-account",
+        },
+        body: JSON.stringify({ model: "gpt-5.5", input: "hello", stream: false }),
+      });
+      expect(response.status).toBe(200);
+
+      const compact = await fetch(new URL("/v1/responses/compact", server.url), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: "Bearer caller-secret",
+          "chatgpt-account-id": "caller-account",
+        },
+        body: JSON.stringify({ model: "gpt-5.5", input: [] }),
+      });
+      expect(compact.status).toBe(200);
+
+      // Both requests went to the company API-key provider: only sk-company-key, no caller auth.
+      expect(seen.every(req => req.authorization === "Bearer sk-company-key")).toBe(true);
+      expect(seen.every(req => req.accountId === null)).toBe(true);
+    } finally {
+      globalThis.fetch = originalGlobalFetch;
+      await server.stop(true);
+      await upstream.stop(true);
+    }
+  });
+
+});

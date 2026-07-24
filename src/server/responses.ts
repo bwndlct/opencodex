@@ -1054,6 +1054,7 @@ export async function handleResponses(
     parsed,
     parsed.modelId,
     identity.requestKind,
+    identity.subagentKind,
     identity.requestedEffort,
     config,
   );

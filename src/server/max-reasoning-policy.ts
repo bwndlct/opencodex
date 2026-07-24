@@ -61,16 +61,19 @@ export function forceConfiguredReasoningMax(
   parsed: OcxParsedRequest,
   requestedModelId: string,
   requestKind: string | undefined,
+  subagentKind: string | undefined,
   requestedEffort: string | undefined,
   config: OcxConfig,
 ): MaxReasoningRewrite | null {
   const policy = policyForModel(requestedModelId, config);
   const current = parsed.options.reasoning ?? requestedEffort;
   const effectiveRequestKind = requestKind ?? requestKindFromClientMetadata(parsed._rawBody);
+  const isMemoryTurn =
+    effectiveRequestKind === "memory" || subagentKind === "memory_consolidation";
   if (
     policy === null
     || current?.toLowerCase() === "max"
-    || (policy === "luna" && effectiveRequestKind === "memory")
+    || (policy === "luna" && isMemoryTurn)
     || (policy === "luna" && current?.toLowerCase() === "low")
   ) {
     return null;

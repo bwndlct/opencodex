@@ -999,7 +999,7 @@ export const ko: Record<TKey, string> = {
   "sessions.col.execution": "실행",
   "sessions.col.model": "모델",
   "sessions.col.policy": "정책",
-  "sessions.col.tokens": "토큰",
+  "sessions.col.tokens": "누적 토큰",
   "sessions.activeRequests": "활성 {count}개",
   "sessions.source.gpt": "{count}GPT",
   "sessions.source.glm": "{count}GLM",

@@ -21,6 +21,7 @@ interface PolicyState {
 }
 
 const SESSION_HISTORY_REFRESH_MS = 30_000;
+const SESSION_HISTORY_DISPLAY_LIMIT = 500;
 
 function formatTime(value: number, locale: Locale): string {
   return new Date(value).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -348,7 +349,7 @@ export default function Sessions({ apiBase }: { apiBase: string }) {
       const [activeResponse, historyResponse] = await Promise.all([
         fetch(`${apiBase}/api/sessions/active`, { signal }),
         shouldRefreshHistory
-          ? fetch(`${apiBase}/api/sessions/history?limit=100`, { signal })
+          ? fetch(`${apiBase}/api/sessions/history?limit=${SESSION_HISTORY_DISPLAY_LIMIT}`, { signal })
           : Promise.resolve(null),
       ]);
       if (!activeResponse.ok || (historyResponse && !historyResponse.ok)) {
@@ -495,7 +496,7 @@ export default function Sessions({ apiBase }: { apiBase: string }) {
                   <th>{t("sessions.col.session")}</th>
                   <th>{t("sessions.col.activity")}</th>
                   <th>{t("sessions.col.model")}</th>
-                  <th>{t("sessions.col.tokens")}</th>
+                  <th className="session-token-heading">{t("sessions.col.tokens")}</th>
                   <th>{t("sessions.col.policy")}</th>
                 </tr></thead>
                  <tbody>{active.map(session => (
@@ -535,7 +536,7 @@ export default function Sessions({ apiBase }: { apiBase: string }) {
                   <th>{t("sessions.col.session")}</th>
                   <th>{t("sessions.col.execution")}</th>
                   <th>{t("sessions.col.model")}</th>
-                  <th>{t("sessions.col.tokens")}</th>
+                  <th className="session-token-heading">{t("sessions.col.tokens")}</th>
                   <th>{t("sessions.col.policy")}</th>
                 </tr></thead>
                  <tbody>{recentIdle.map(session => (

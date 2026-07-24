@@ -88,6 +88,7 @@ import { requestIdentityFrom, type RequestIdentity } from "./request-identity";
 import type { RequestRouteObservation } from "./request-activity";
 import { getSessionRoutePolicy, type SessionRoutePolicy } from "./session-route-policy";
 import { isBareOpenAiModel, runOpenAiDualUpstream } from "./openai-dual-upstream";
+import { beginSessionTurn, type SessionTurnGuard } from "./session-turn-guard";
 import { forceConfiguredReasoningMax } from "./max-reasoning-policy";
 import { resolveRequestCodexAuth, type RequestCodexAuthSelection } from "./request-auth-resolver";
 import {
@@ -952,6 +953,21 @@ export async function handleResponses(
   const identity = options.identityOverride ?? requestIdentityFrom(req.headers, body);
   Object.assign(logCtx, identity);
   options.onRequestIdentityResolved?.(identity);
+
+  // Per-session turn guard (fork feature): on the HTTP path, if a new main turn
+  // arrives for a session that already has one in flight, abort the previous
+  // turn's upstream — mirroring the WebSocket path's ws.data.cancel?.().
+  // Only top-level client requests participate; internal delegations are exempt.
+  const isTopLevelClientRequest = !options.comboAttempt && !options.dualUpstreamAttempt && !options.identityOverride;
+  const turnGuard: SessionTurnGuard | null = isTopLevelClientRequest
+    ? beginSessionTurn(identity)
+    : null;
+  // Merge session-guard abort with the caller's abortSignal so either source
+  // aborts the downstream upstream fetch.
+  const effectiveAbortSignal = turnGuard && options.abortSignal
+    ? AbortSignal.any([turnGuard.signal, options.abortSignal])
+    : turnGuard?.signal ?? options.abortSignal;
+
   const rawModel = body && typeof body === "object" && !Array.isArray(body)
     ? (body as { model?: unknown }).model
     : undefined;
@@ -1333,7 +1349,7 @@ export async function handleResponses(
   const visionPlan = planVisionSidecar(config, route.provider, route.modelId, parsed, openAiSidecar);
   const recordSidecarOutcome = openAiSidecar?.recordOutcome;
   if (visionPlan) {
-    await describeImagesInPlace(parsed, visionPlan, openAiSidecar?.headers ?? selectedForwardHeaders, options.abortSignal, recordSidecarOutcome);
+    await describeImagesInPlace(parsed, visionPlan, openAiSidecar?.headers ?? selectedForwardHeaders, effectiveAbortSignal, recordSidecarOutcome);
   } else if (modelInList(route.provider.noVisionModels, route.modelId)) {
     // Sidecar-covered model but NO plan (no forward provider / missing forwarded auth / sidecar
     // disabled): fail closed — never forward raw images to a text-only upstream.
@@ -1388,7 +1404,7 @@ export async function handleResponses(
     // consumer's cancel to a signalled fetch, so we pass the signal and relay through relayWithAbort,
     // whose cancel() aborts the upstream — preventing leaked connections (RC2, passthrough path).
     const upstream = new AbortController();
-    linkAbortSignal(upstream, options.abortSignal);
+    linkAbortSignal(upstream, effectiveAbortSignal);
     const connectMs = config.connectTimeoutMs ?? 200_000;
     let upstreamResponse: Response;
     try {
@@ -1408,7 +1424,7 @@ export async function handleResponses(
       );
     } catch (err) {
       upstream.abort();
-      if (options.abortSignal?.aborted) return clientCancelledResponse();
+      if (effectiveAbortSignal?.aborted) return clientCancelledResponse();
       const outcome = err instanceof Error && err.name === "TimeoutError" ? "timeout" : "connect_error";
       if (usesCodexForwardPoolAuth(authCtx, route.provider)) recordCodexUpstreamOutcome(config, authCtx.accountId, outcome);
       const msg = outcome === "timeout"
@@ -1518,7 +1534,7 @@ export async function handleResponses(
     }
     if (headers.get("content-type")?.toLowerCase().includes("application/json")) {
       if (!upstreamResponse.ok && options.comboAttempt) {
-        const failure = await consumeComboFailure(upstreamResponse, options.abortSignal);
+        const failure = await consumeComboFailure(upstreamResponse, effectiveAbortSignal);
         options.onConsumedComboFailure?.(failure);
         return failure.response;
       }
@@ -1546,7 +1562,7 @@ export async function handleResponses(
 
   if (adapter.runTurn) {
     const runTurnAbort = new AbortController();
-    linkAbortSignal(runTurnAbort, options.abortSignal);
+    linkAbortSignal(runTurnAbort, effectiveAbortSignal);
     const queue = createAdapterEventQueue();
     const runTurn = async (): Promise<void> => {
       try {
@@ -1641,7 +1657,7 @@ export async function handleResponses(
       settings: wsPlan.settings,
       maxSearches: wsPlan.maxSearches,
       forceEmptyResponseId: true,
-      abortSignal: options.abortSignal,
+      abortSignal: effectiveAbortSignal,
       ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
       recordSidecarOutcome: wsPlan.forwardSidecar?.recordOutcome,
       connectTimeoutMs: config.connectTimeoutMs ?? 200_000,
@@ -1675,7 +1691,7 @@ export async function handleResponses(
   }
 
   const upstream = new AbortController();
-  const cleanupUpstreamAbort = linkAbortSignal(upstream, options.abortSignal);
+  const cleanupUpstreamAbort = linkAbortSignal(upstream, effectiveAbortSignal);
   const connectMs = config.connectTimeoutMs ?? 200_000;
 
   const request = await adapter.buildRequest(parsed, { headers: selectedForwardHeaders });
@@ -1706,7 +1722,7 @@ export async function handleResponses(
   } catch (err) {
     cleanupUpstreamAbort();
     upstream.abort();
-    if (options.abortSignal?.aborted) return clientCancelledResponse();
+    if (effectiveAbortSignal?.aborted) return clientCancelledResponse();
     const msg = err instanceof Error && err.name === "TimeoutError"
       ? `Provider connect timeout after ${connectMs}ms`
       : `Provider unreachable: ${err instanceof Error ? err.message : String(err)}`;
@@ -1746,7 +1762,7 @@ export async function handleResponses(
       } catch (err) {
         cleanupUpstreamAbort();
         upstream.abort();
-        if (options.abortSignal?.aborted) {
+        if (effectiveAbortSignal?.aborted) {
           return { failed: clientCancelledResponse() };
         }
         const msg = err instanceof Error && err.name === "TimeoutError"
@@ -1832,7 +1848,7 @@ export async function handleResponses(
     }
     if (!upstreamResponse.ok) {
       if (options.comboAttempt) {
-        const failure = await consumeComboFailure(upstreamResponse, options.abortSignal)
+        const failure = await consumeComboFailure(upstreamResponse, effectiveAbortSignal)
           .finally(cleanupUpstreamAbort);
         options.onConsumedComboFailure?.(failure);
         return failure.response;

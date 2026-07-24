@@ -345,6 +345,41 @@ export function providerHeadersConfigError(headers: unknown): string | null {
   return null;
 }
 
+export function visionSidecarProviderConfigError(
+  config: Pick<OcxConfig, "providers" | "visionSidecar">,
+  requireEnabled = false,
+): string | null {
+  const sidecar = config.visionSidecar;
+  if (!sidecar || sidecar.provider === undefined) return null;
+  if (typeof sidecar.provider !== "string" || !isValidProviderName(sidecar.provider)) {
+    return "visionSidecar.provider must be a valid provider name";
+  }
+  if (sidecar.backend === "anthropic") {
+    return "visionSidecar.provider is valid only with the openai backend";
+  }
+  const provider = config.providers[sidecar.provider];
+  if (!provider) return "visionSidecar.provider must reference a configured provider";
+  if (requireEnabled && provider.disabled === true) {
+    return "visionSidecar.provider must reference an enabled provider";
+  }
+  if (provider.adapter !== "openai-responses") {
+    return "visionSidecar.provider must use the openai-responses adapter";
+  }
+  if (provider.authMode === "passthrough") return null;
+  if (provider.authMode === "forward" && isCanonicalOpenAiForwardProvider(provider)) return null;
+  if (
+    (provider.authMode === undefined || provider.authMode === "key")
+    && typeof provider.apiKey === "string"
+    && provider.apiKey.trim() !== ""
+  ) {
+    if (requireEnabled && !resolveEnvValue(provider.apiKey)?.trim()) {
+      return "visionSidecar.provider API key is unavailable at runtime";
+    }
+    return null;
+  }
+  return "visionSidecar.provider must use key auth with a configured apiKey, passthrough auth, or the canonical openai forward provider";
+}
+
 export function positiveIntegerRecordConfigError(value: unknown, field: string): string | null {
   if (value === undefined) return null;
   if (!value || typeof value !== "object" || Array.isArray(value)) return `${field} must be a plain object`;
@@ -485,6 +520,14 @@ const configSchema = z.object({
         message: "dual upstream requires the canonical openai forward provider",
       });
     }
+  }
+  const visionSidecarError = visionSidecarProviderConfigError(config as OcxConfig);
+  if (visionSidecarError) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["visionSidecar", "provider"],
+      message: visionSidecarError,
+    });
   }
   const combos = (config as { combos?: unknown }).combos;
   if (combos !== undefined) {

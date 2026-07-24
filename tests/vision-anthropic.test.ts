@@ -225,7 +225,28 @@ describe("Anthropic vision planning and management config", () => {
     const previousHome = process.env.OPENCODEX_HOME;
     const isolatedHome = mkdtempSync(join(tmpdir(), "ocx-vision-management-"));
     process.env.OPENCODEX_HOME = isolatedHome;
-    const config: OcxConfig = { port: 10100, defaultProvider: "none", providers: {} };
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "company",
+      providers: {
+        company: {
+          adapter: "openai-responses",
+          authMode: "passthrough",
+          baseUrl: "https://company.example/v1",
+        },
+        companyKey: {
+          adapter: "openai-responses",
+          authMode: "key",
+          baseUrl: "https://company-key.example/v1",
+          apiKey: "vision-key-test",
+        },
+        companyKeyMissing: {
+          adapter: "openai-responses",
+          authMode: "key",
+          baseUrl: "https://company-key-missing.example/v1",
+        },
+      },
+    };
     try {
       const put = await handleManagementAPI(
         new Request("http://localhost/api/sidecar-settings", {
@@ -243,6 +264,7 @@ describe("Anthropic vision planning and management config", () => {
       expect((await put.json()).vision).toEqual({
         model: "claude-sonnet-5",
         backend: "anthropic",
+        availableProviders: [{ name: "company" }, { name: "companyKey" }],
         maxDescriptionsPerTurn: 4,
       });
       expect(config.webSearchSidecar).toEqual({ model: "claude-search", backend: "anthropic", reasoning: "high" });
@@ -257,6 +279,7 @@ describe("Anthropic vision planning and management config", () => {
       expect(getBody.vision).toEqual({
         model: "claude-sonnet-5",
         backend: "anthropic",
+        availableProviders: [{ name: "company" }, { name: "companyKey" }],
         maxDescriptionsPerTurn: 4,
       });
 
@@ -275,9 +298,81 @@ describe("Anthropic vision planning and management config", () => {
       expect(clear.status).toBe(200);
       const clearBody = await clear.json() as Record<string, any>;
       expect(clearBody.webSearch).toEqual({ model: "gpt-5.6-luna" });
-      expect(clearBody.vision).toEqual({ model: "gpt-5.6-luna", maxDescriptionsPerTurn: 4 });
+      expect(clearBody.vision).toEqual({
+        model: "gpt-5.6-luna",
+        availableProviders: [{ name: "company" }, { name: "companyKey" }],
+        maxDescriptionsPerTurn: 4,
+      });
       expect(config.webSearchSidecar).toEqual({ reasoning: "high" });
       expect(config.visionSidecar).toEqual({ maxDescriptionsPerTurn: 4 });
+
+      const selectProvider = await handleManagementAPI(
+        new Request("http://localhost/api/sidecar-settings", {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            vision: { backend: "openai", provider: "company", model: "gpt-5.6-luna" },
+          }),
+        }),
+        new URL("http://localhost/api/sidecar-settings"),
+        config,
+      );
+      expect(selectProvider.status).toBe(200);
+      expect((await selectProvider.json()).vision).toMatchObject({
+        backend: "openai",
+        provider: "company",
+        model: "gpt-5.6-luna",
+      });
+      expect(config.visionSidecar?.provider).toBe("company");
+
+      const selectKeyProvider = await handleManagementAPI(
+        new Request("http://localhost/api/sidecar-settings", {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ vision: { provider: "companyKey" } }),
+        }),
+        new URL("http://localhost/api/sidecar-settings"),
+        config,
+      );
+      expect(selectKeyProvider.status).toBe(200);
+      expect((await selectKeyProvider.json()).vision).toMatchObject({ provider: "companyKey" });
+      expect(config.visionSidecar?.provider).toBe("companyKey");
+
+      const selectMissingKeyProvider = await handleManagementAPI(
+        new Request("http://localhost/api/sidecar-settings", {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ vision: { provider: "companyKeyMissing" } }),
+        }),
+        new URL("http://localhost/api/sidecar-settings"),
+        config,
+      );
+      expect(selectMissingKeyProvider.status).toBe(400);
+      expect(config.visionSidecar?.provider).toBe("companyKey");
+
+      const invalidProviderBackend = await handleManagementAPI(
+        new Request("http://localhost/api/sidecar-settings", {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ vision: { backend: "anthropic", provider: "company" } }),
+        }),
+        new URL("http://localhost/api/sidecar-settings"),
+        config,
+      );
+      expect(invalidProviderBackend.status).toBe(400);
+      expect(config.visionSidecar?.backend).toBe("openai");
+
+      const clearProvider = await handleManagementAPI(
+        new Request("http://localhost/api/sidecar-settings", {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ vision: { provider: null } }),
+        }),
+        new URL("http://localhost/api/sidecar-settings"),
+        config,
+      );
+      expect(clearProvider.status).toBe(200);
+      expect(config.visionSidecar?.provider).toBeUndefined();
 
       for (const vision of [
         { backend: "other" },
@@ -307,7 +402,7 @@ describe("Anthropic vision planning and management config", () => {
       );
       expect(invalidWebBackend?.status).toBe(400);
       expect(config.webSearchSidecar).toEqual({ reasoning: "high" });
-      expect(config.visionSidecar).toEqual({ maxDescriptionsPerTurn: 4 });
+      expect(config.visionSidecar).toEqual({ backend: "openai", model: "gpt-5.6-luna", maxDescriptionsPerTurn: 4 });
     } finally {
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousHome;

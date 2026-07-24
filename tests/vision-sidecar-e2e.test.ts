@@ -137,11 +137,140 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
       expect(sidecarAuth).toBe("Bearer forward-oauth-token");
       expect(sidecarBody).toContain("input_image");
       expect(sidecarBody).toContain("aGVsbG8taW1hZ2UtYnl0ZXM=");
+      expect(JSON.parse(sidecarBody).model).toBe("gpt-5.6-luna");
 
       // The text-only upstream saw the caption, not the image bytes.
       expect(upstreamBody).toContain(CAPTION);
       expect(upstreamBody).not.toContain("aGVsbG8taW1hZ2UtYnl0ZXM=");
       expect(upstreamBody).not.toContain("image_url");
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("explicit passthrough vision provider describes through /v1/responses without affecting the main route", async () => {
+    let upstreamBody = "";
+    let sidecarBody = "";
+    let sidecarPath = "";
+    let sidecarAuth: string | null = null;
+    let sidecarAccount: string | null = null;
+    let sidecarProject: string | null = null;
+    upstream = serveUpstream(body => { upstreamBody = body; });
+    sidecar = serveSidecar((req, body) => {
+      sidecarBody = body;
+      sidecarPath = new URL(req.url).pathname;
+      sidecarAuth = req.headers.get("authorization");
+      sidecarAccount = req.headers.get("chatgpt-account-id");
+      sidecarProject = req.headers.get("openai-project");
+    });
+
+    const config: OcxConfig = {
+      port: 0,
+      hostname: "127.0.0.1",
+      defaultProvider: "textonly",
+      providers: {
+        textonly: {
+          adapter: "openai-chat",
+          baseUrl: `http://127.0.0.1:${upstream.port}/v1`,
+          allowPrivateNetwork: true,
+          apiKey: "key-alpha-000111222333",
+          noVisionModels: ["blind-model"],
+        },
+        company: {
+          adapter: "openai-responses",
+          authMode: "passthrough",
+          baseUrl: `${sidecar.url}v1`,
+          allowPrivateNetwork: true,
+        },
+      },
+      visionSidecar: { backend: "openai", provider: "company", model: "gpt-5.6-luna" },
+    };
+    saveConfig(config);
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: "Bearer company-forwarded-token",
+          "chatgpt-account-id": "must-not-reach-company",
+          "openai-project": "project-alpha",
+        },
+        body: JSON.stringify(baseRequest("textonly/blind-model")),
+      });
+      expect(res.status).toBe(200);
+      expect(sidecarPath).toBe("/v1/responses");
+      expect(sidecarAuth).toBe("Bearer company-forwarded-token");
+      expect(sidecarAccount).toBeNull();
+      expect(sidecarProject).toBe("project-alpha");
+      expect(JSON.parse(sidecarBody).model).toBe("gpt-5.6-luna");
+      expect(sidecarBody).toContain(PNG_DATA_URL);
+      expect(upstreamBody).toContain(CAPTION);
+      expect(upstreamBody).not.toContain(PNG_DATA_URL);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("explicit API-key vision provider uses its configured key and /v1/responses", async () => {
+    let upstreamBody = "";
+    let sidecarBody = "";
+    let sidecarPath = "";
+    let sidecarAuth: string | null = null;
+    let sidecarAccount: string | null = null;
+    let sidecarProject: string | null = null;
+    upstream = serveUpstream(body => { upstreamBody = body; });
+    sidecar = serveSidecar((req, body) => {
+      sidecarBody = body;
+      sidecarPath = new URL(req.url).pathname;
+      sidecarAuth = req.headers.get("authorization");
+      sidecarAccount = req.headers.get("chatgpt-account-id");
+      sidecarProject = req.headers.get("openai-project");
+    });
+
+    const config: OcxConfig = {
+      port: 0,
+      hostname: "127.0.0.1",
+      defaultProvider: "textonly",
+      providers: {
+        textonly: {
+          adapter: "openai-chat",
+          baseUrl: `http://127.0.0.1:${upstream.port}/v1`,
+          allowPrivateNetwork: true,
+          apiKey: "main-key-test",
+          noVisionModels: ["blind-model"],
+        },
+        companyKey: {
+          adapter: "openai-responses",
+          authMode: "key",
+          baseUrl: sidecar.url,
+          allowPrivateNetwork: true,
+          apiKey: "vision-key-test",
+        },
+      },
+      visionSidecar: { backend: "openai", provider: "companyKey", model: "gpt-5.6-luna" },
+    };
+    saveConfig(config);
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: "Caller caller-credential-must-not-forward",
+          "chatgpt-account-id": "caller-account-must-not-forward",
+          "openai-project": "caller-project-must-not-forward",
+        },
+        body: JSON.stringify(baseRequest("textonly/blind-model")),
+      });
+      expect(res.status).toBe(200);
+      expect(sidecarPath).toBe("/v1/responses");
+      expect(sidecarAuth).toBe("Bearer vision-key-test");
+      expect(sidecarAccount).toBeNull();
+      expect(sidecarProject).toBeNull();
+      expect(JSON.parse(sidecarBody).model).toBe("gpt-5.6-luna");
+      expect(upstreamBody).toContain(CAPTION);
+      expect(upstreamBody).not.toContain(PNG_DATA_URL);
     } finally {
       server.stop(true);
     }

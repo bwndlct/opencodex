@@ -1,5 +1,5 @@
 import type { OcxProviderConfig } from "../types";
-import { FORWARD_HEADERS } from "../adapters/openai-responses";
+import { resolveEnvValue } from "../config";
 import { signalWithTimeout, cancelBodyOnAbort } from "../lib/abort";
 import { sidecarEnter } from "../lib/sidecar-tracker";
 import { fetchWithResetRetry } from "../lib/upstream-retry";
@@ -17,6 +17,16 @@ export type DescribeOutcome = { text: string; error?: string };
 const ALLOWED_IMAGE_MIME = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif"]);
 /** ~20 MB — generous enough for screenshots; rejects pathological payloads before forwarding. */
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+
+function isKeyAuthProvider(provider: OcxProviderConfig): boolean {
+  return provider.authMode === undefined || provider.authMode === "key";
+}
+
+function responsesEndpoint(provider: OcxProviderConfig): string {
+  const base = provider.baseUrl.replace(/\/+$/, "");
+  if (provider.authMode === "forward" || provider.authMode === "passthrough") return `${base}/responses`;
+  return `${base.replace(/\/v1\/?$/, "")}/v1/responses`;
+}
 
 /**
  * Validate an image URL before forwarding. Data URLs are checked for an allowed media type and a sane
@@ -41,16 +51,16 @@ function validateImageUrl(url: string): string | null {
 }
 
 /**
- * Describe ONE image via a gpt vision model through the ChatGPT forward backend — the path that has
- * native image input. Reuses selected forwarded OAuth headers. The user's own request text is
- * passed as context so the description is focused. Never throws — returns `{error}` on failure.
+ * Describe ONE image through an already-resolved OpenAI Responses provider. The resolver supplies
+ * a sanitized header set for canonical ChatGPT/account auth, company passthrough auth, or a
+ * configured API key. Never throws — returns `{error}` on failure.
  */
 export async function describeImage(
   imageUrl: string,
   detail: string | undefined,
   contextText: string,
-  forwardProvider: OcxProviderConfig,
-  selectedForwardHeaders: Headers,
+  provider: OcxProviderConfig,
+  selectedHeaders: Headers,
   settings: VisionSettings,
   abortSignal?: AbortSignal,
   recordOutcome?: SidecarOutcomeRecorder,
@@ -58,12 +68,19 @@ export async function describeImage(
   const invalid = validateImageUrl(imageUrl);
   if (invalid) return { text: "", error: invalid };
 
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (forwardProvider.headers) Object.assign(headers, forwardProvider.headers);
-  for (const h of FORWARD_HEADERS) {
-    const v = selectedForwardHeaders.get(h);
-    if (v) headers[h] = v;
+  const apiKey = isKeyAuthProvider(provider) ? resolveEnvValue(provider.apiKey)?.trim() : undefined;
+  if (isKeyAuthProvider(provider) && !apiKey) {
+    return { text: "", error: "OpenAI vision sidecar API key is unavailable" };
   }
+
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (provider.headers) Object.assign(headers, provider.headers);
+  for (const [name, value] of selectedHeaders) {
+    const lower = name.toLowerCase();
+    if (isKeyAuthProvider(provider) && (lower === "authorization" || lower === "chatgpt-account-id")) continue;
+    headers[name] = value;
+  }
+  if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
   const content: unknown[] = [];
   if (contextText) content.push({ type: "input_text", text: `The user's request about this image: ${contextText}` });
   content.push({ type: "input_image", image_url: imageUrl, detail: detail ?? "high" });
@@ -87,7 +104,7 @@ export async function describeImage(
   const t0 = Date.now();
   try {
     const res = await fetchWithResetRetry(
-      () => fetch(`${forwardProvider.baseUrl}/responses`, {
+      () => fetch(responsesEndpoint(provider), {
         method: "POST",
         headers,
         body: JSON.stringify(body),

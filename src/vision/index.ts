@@ -5,13 +5,13 @@ import { describeImage, type DescribeOutcome, type VisionSettings } from "./desc
 import { describeImageAnthropic } from "./anthropic-describe";
 import type { CodexAuthContext } from "../codex/auth-context";
 import { getAccountSet } from "../oauth/store";
-import type { ResolvedOpenAiForwardSidecar } from "../providers/openai-sidecar";
+import type { ResolvedOpenAiVisionSidecar } from "./openai-provider";
 import type { SidecarOutcomeRecorder } from "../web-search/executor";
 
 export { describeImage } from "./describe";
 export { describeImageAnthropic, parseAnthropicVisionSSE } from "./anthropic-describe";
 
-const DEFAULT_VISION_MODEL = "gpt-5.4-mini";
+export const DEFAULT_VISION_MODEL = "gpt-5.6-luna";
 const DEFAULT_ANTHROPIC_VISION_MODEL = "claude-sonnet-5";
 const DEFAULT_TIMEOUT_MS = 45_000;
 const DEFAULT_MAX_DESCRIPTIONS_PER_TURN = 8;
@@ -137,12 +137,13 @@ export function shouldResolveOpenAiVisionSidecar(
   if (!modelInList(provider.noVisionModels, modelId) || !messagesHaveImage(parsed)) return false;
   const cfg = config.visionSidecar ?? {};
   if (cfg.enabled === false) return false;
+  if (cfg.provider) return true;
   return resolveVisionBackend(cfg.backend, findAnthropicVisionProvider(config)) === "openai";
 }
 
 export interface VisionPlan {
   backend: "openai" | "anthropic";
-  forwardSidecar?: ResolvedOpenAiForwardSidecar;
+  forwardSidecar?: ResolvedOpenAiVisionSidecar;
   anthropicSidecar?: AnthropicVisionProvider;
   settings: VisionSettings;
   maxDescriptionsPerTurn: number;
@@ -159,14 +160,14 @@ export function planVisionSidecar(
   provider: OcxProviderConfig,
   modelId: string,
   parsed: OcxParsedRequest,
-  openAiSidecar?: ResolvedOpenAiForwardSidecar,
+  openAiSidecar?: ResolvedOpenAiVisionSidecar,
 ): VisionPlan | undefined {
   if (!modelInList(provider.noVisionModels, modelId)) return undefined;
   if (!messagesHaveImage(parsed)) return undefined;
   const cfg = config.visionSidecar ?? {};
   if (cfg.enabled === false) return undefined;
   const anthropicSidecar = findAnthropicVisionProvider(config);
-  const backend = resolveVisionBackend(cfg.backend, anthropicSidecar);
+  const backend = cfg.provider ? "openai" : resolveVisionBackend(cfg.backend, anthropicSidecar);
   const maxDescriptionsPerTurn = resolveMaxDescriptionsPerTurn(cfg.maxDescriptionsPerTurn);
 
   if (backend === "anthropic") {
@@ -225,6 +226,9 @@ function descriptionIdentity(job: ImageJob, plan: VisionPlan): { key: string; pe
   return {
     key: JSON.stringify([
       plan.backend,
+      plan.backend === "openai"
+        ? plan.forwardSidecar?.providerName ?? ""
+        : plan.anthropicSidecar?.providerName ?? "",
       plan.settings.model,
       job.detail ?? "high",
       imageHash,
@@ -279,7 +283,7 @@ export async function describeImagesInPlace(
   selectedForwardHeaders: Headers,
   abortSignal?: AbortSignal,
   recordSidecarOutcome?: SidecarOutcomeRecorder,
-): Promise<void> {
+): Promise<{ total: number; described: number; failed: number }> {
   // 1. Gather every image part across messages, each with its own message's text as context.
   const jobs: ImageJob[] = [];
   const targets: { msg: OcxMessage; parts: OcxContentPart[] }[] = [];
@@ -297,7 +301,7 @@ export async function describeImagesInPlace(
     }
     targets.push({ msg, parts });
   }
-  if (jobs.length === 0) return;
+  if (jobs.length === 0) return { total: 0, described: 0, failed: 0 };
 
   // 2. Admit misses in source order. Cache hits and same-turn waiters do not consume the cap.
   const inFlight = new Map<string, Promise<DescribeOutcome>>();
@@ -354,6 +358,8 @@ export async function describeImagesInPlace(
     for (const p of parts) newParts.push(p.type === "image" ? renderDescription(outcomes[oi++]) : p);
     msg.content = newParts;
   }
+  const failed = outcomes.filter(outcome => !!outcome.error || !outcome.text.trim()).length;
+  return { total: outcomes.length, described: outcomes.length - failed, failed };
 }
 
 /**

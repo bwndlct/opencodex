@@ -579,6 +579,8 @@ export interface OcxVisionSidecarConfig {
   enabled?: boolean;
   /** Description backend. Unset prefers a usable stored Anthropic OAuth credential, else OpenAI. */
   backend?: "openai" | "anthropic";
+  /** Explicit OpenAI Responses provider used only for vision descriptions (key, passthrough, or account auth). */
+  provider?: string;
   /** Vision model that describes images. */
   model?: string;
   /** Max description cache misses admitted in one main-model turn. Zero disables description calls. */

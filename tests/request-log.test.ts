@@ -49,6 +49,9 @@ describe("request log metadata", () => {
       overrideSourceModel: "gpt-5.4",
       overrideTargetModel: "zai-anthropic/glm-5.2",
       overrideEffort: "max",
+      visionSidecarProvider: "company",
+      visionSidecarModel: "gpt-5.6-luna",
+      visionSidecarOutcome: "described",
     }, 200, undefined, entry => captured.push(entry));
 
     expect(captured[0]).toMatchObject({
@@ -63,6 +66,9 @@ describe("request log metadata", () => {
       overrideSourceModel: "gpt-5.4",
       overrideTargetModel: "zai-anthropic/glm-5.2",
       overrideEffort: "max",
+      visionSidecarProvider: "company",
+      visionSidecarModel: "gpt-5.6-luna",
+      visionSidecarOutcome: "described",
     });
   });
 

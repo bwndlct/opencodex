@@ -11,11 +11,17 @@ interface ProviderInfo { name: string; adapter: string; baseUrl: string; default
 interface ModelInfo { id: string; provider: string; owned_by?: string }
 interface SettingsData { codexAutoStart: boolean; port: number; hostname: string }
 type SidecarBackend = "openai" | "anthropic";
-interface SidecarSetting { backend?: SidecarBackend; model: string }
+interface SidecarSetting {
+  backend?: SidecarBackend;
+  model: string;
+  provider?: string | null;
+  availableProviders?: Array<{ name: string; label?: string }>;
+  maxDescriptionsPerTurn?: number;
+}
 interface SidecarData { webSearch: SidecarSetting; vision: SidecarSetting }
 interface SidecarPatch {
-  webSearch?: { backend?: SidecarBackend | null; model?: string };
-  vision?: { backend?: SidecarBackend | null; model?: string };
+  webSearch?: { backend?: SidecarBackend | null; model?: string; provider?: string | null };
+  vision?: { backend?: SidecarBackend | null; model?: string; provider?: string | null };
 }
 interface ShadowCallData { enabled: boolean; model: string }
 interface UsageSummary30d { summary: { requests: number; totalTokens: number; coverageRatio: number } }
@@ -98,12 +104,13 @@ function updateJobLabel(status: UpdateJobStatus, t: (key: TKey) => string): stri
 
 function mergeSidecarSetting(
   current: SidecarSetting,
-  update?: { backend?: SidecarBackend | null; model?: string },
+  update?: { backend?: SidecarBackend | null; model?: string; provider?: string | null },
 ): SidecarSetting {
   const merged = { ...current };
   if (update?.model !== undefined) merged.model = update.model;
   if (update?.backend === null) delete merged.backend;
   else if (update?.backend !== undefined) merged.backend = update.backend;
+  if (update?.provider !== undefined) merged.provider = update.provider === "" ? null : update.provider;
   return merged;
 }
 
@@ -366,6 +373,10 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
     return Object.entries(g).sort(([a], [b]) => a.localeCompare(b));
   }, [models]);
   const sidecarModels = useMemo(() => sidecarModelOptions(models), [models]);
+  const visionProviderOptions = useMemo(
+    () => (sidecar?.vision.availableProviders ?? []).map(p => ({ value: p.name, label: p.label ?? p.name })),
+    [sidecar?.vision.availableProviders],
+  );
 
   if (error) {
     return (
@@ -890,10 +901,27 @@ export default function Dashboard({ apiBase }: { apiBase: string }) {
             <Select
               value={sidecar?.vision.model ?? "gpt-5.6-luna"}
               options={sidecarModels}
-              onChange={model => { void saveSidecar({ vision: { model, backend: sidecarBackendForModel(models, model) } }); }}
+              onChange={model => {
+                const backend = sidecarBackendForModel(models, model);
+                void saveSidecar(backend === "anthropic"
+                  ? { vision: { model, backend, provider: null } }
+                  : { vision: { model, backend } });
+              }}
               disabled={!sidecar || sidecarSaving}
               label={t("dash.sidecarModel")}
             />
+            {sidecar?.vision.backend !== "anthropic" && visionProviderOptions.length > 0 && (
+              <Select
+                value={sidecar?.vision.provider ?? ""}
+                options={[
+                  { value: "", label: t("dash.sidecarProviderDefault") },
+                  ...visionProviderOptions,
+                ]}
+                onChange={provider => { void saveSidecar({ vision: { provider: provider || null } }); }}
+                disabled={!sidecar || sidecarSaving}
+                label={t("dash.sidecarProvider")}
+              />
+            )}
           </div>
         </div>
       </div>

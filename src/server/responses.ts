@@ -38,7 +38,7 @@ import {
   UnsupportedOAuthProviderError,
 } from "../oauth";
 import { buildWebSearchTool, planWebSearch, runWithWebSearch, shouldResolveOpenAiWebSearchSidecar } from "../web-search";
-import { describeImagesInPlace, planVisionSidecar, shouldResolveOpenAiVisionSidecar, stripImagesInPlace } from "../vision";
+import { DEFAULT_VISION_MODEL, describeImagesInPlace, planVisionSidecar, shouldResolveOpenAiVisionSidecar, stripImagesInPlace } from "../vision";
 import { createAdapterEventQueue, preflightAdapterEvents } from "../adapters/run-turn-queue";
 import {
   applyCodexAuthContextToProvider,
@@ -60,6 +60,7 @@ import {
 import { fetchWithResetRetry, fetchWithTransientRetry } from "../lib/upstream-retry";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "./auth-cors";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../providers/openai-sidecar";
+import { resolveOpenAiVisionSidecar, type ResolvedOpenAiVisionSidecar } from "../vision/openai-provider";
 import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../providers/openai-virtual-models";
 import { isUsageDebugEnabled } from "../usage/debug";
 import { readJsonRequestBody, DecompressedBodyTooLargeError, UnsupportedContentEncodingError } from "./request-decompress";
@@ -408,6 +409,13 @@ export function sidecarOutcomeRecorder(config: OcxConfig, authCtx: CodexAuthCont
   return authCtx.kind === "pool" || authCtx.kind === "main-pool"
     ? outcome => recordCodexUpstreamOutcome(config, authCtx.accountId, outcome)
     : undefined;
+}
+
+function isOptionalSidecarAuthError(error: unknown): boolean {
+  return error instanceof CodexPoolAuthenticationError
+    || error instanceof CodexAuthContextError
+    || error instanceof CodexAccountCooldownError
+    || error instanceof CodexThreadAffinityExpiredError;
 }
 
 /** Account id to attribute log labels / upstream outcomes to (pool + rotation-injected main). */
@@ -1320,12 +1328,14 @@ export async function handleResponses(
   sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, adapter.name);
   const isPassthrough = "passthrough" in adapter && !!adapter.passthrough;
 
-  let openAiSidecar: ResolvedOpenAiForwardSidecar | undefined;
+  let openAiForwardSidecar: ResolvedOpenAiForwardSidecar | undefined;
+  let openAiVisionSidecar: ResolvedOpenAiVisionSidecar | undefined;
   const needsOpenAiVision = shouldResolveOpenAiVisionSidecar(config, route.provider, route.modelId, parsed);
   const needsOpenAiSearch = shouldResolveOpenAiWebSearchSidecar(config, parsed, isPassthrough);
-  if (needsOpenAiVision || needsOpenAiSearch) {
+  const needsDefaultOpenAiVision = needsOpenAiVision && !config.visionSidecar?.provider;
+  if (needsDefaultOpenAiVision || needsOpenAiSearch) {
     try {
-      openAiSidecar = await resolveFirstUsableOpenAiSidecar(
+      openAiForwardSidecar = await resolveFirstUsableOpenAiSidecar(
         listOpenAiForwardSidecarCandidates(config),
         req.headers,
         config,
@@ -1334,26 +1344,54 @@ export async function handleResponses(
       // Sidecars are optional helpers for an otherwise independent routed turn.
       // An unavailable/cooling/expired Multi credential disables the helper; it
       // must not turn a valid routed-provider request into a Codex-auth failure.
-      if (
-        !(err instanceof CodexPoolAuthenticationError)
-        && !(err instanceof CodexAuthContextError)
-        && !(err instanceof CodexAccountCooldownError)
-        && !(err instanceof CodexThreadAffinityExpiredError)
-      ) throw err;
+      if (!isOptionalSidecarAuthError(err)) throw err;
+    }
+  }
+  if (needsOpenAiVision) {
+    try {
+      openAiVisionSidecar = await resolveOpenAiVisionSidecar(config, req.headers, openAiForwardSidecar);
+    } catch (err) {
+      if (!isOptionalSidecarAuthError(err)) throw err;
     }
   }
 
   // Vision sidecar: the routed model can't see images (provider.noVisionModels). Describe each
   // attached image through the selected sidecar backend and replace it with text BEFORE the main
   // call, so the text-only model can reason about it.
-  const visionPlan = planVisionSidecar(config, route.provider, route.modelId, parsed, openAiSidecar);
-  const recordSidecarOutcome = openAiSidecar?.recordOutcome;
+  const visionPlan = planVisionSidecar(config, route.provider, route.modelId, parsed, openAiVisionSidecar);
+  const recordSidecarOutcome = visionPlan?.forwardSidecar?.recordOutcome;
   if (visionPlan) {
-    await describeImagesInPlace(parsed, visionPlan, openAiSidecar?.headers ?? selectedForwardHeaders, effectiveAbortSignal, recordSidecarOutcome);
+    logCtx.visionSidecarProvider = visionPlan.backend === "openai"
+      ? visionPlan.forwardSidecar?.providerName
+      : visionPlan.anthropicSidecar?.providerName;
+    logCtx.visionSidecarModel = visionPlan.settings.model;
+    const summary = await describeImagesInPlace(
+      parsed,
+      visionPlan,
+      visionPlan.forwardSidecar?.headers ?? selectedForwardHeaders,
+      effectiveAbortSignal,
+      recordSidecarOutcome,
+    );
+    logCtx.visionSidecarOutcome = summary.failed === 0
+      ? "described"
+      : summary.described === 0 ? "failed" : "partial";
+    if (summary.failed > 0) {
+      logCtx.visionSidecarReason = summary.described === 0
+        ? "all_descriptions_failed"
+        : "some_descriptions_failed";
+    }
   } else if (modelInList(route.provider.noVisionModels, route.modelId)) {
-    // Sidecar-covered model but NO plan (no forward provider / missing forwarded auth / sidecar
-    // disabled): fail closed — never forward raw images to a text-only upstream.
-    stripImagesInPlace(parsed);
+    // Sidecar-covered model but NO plan (no usable sidecar credential / provider / sidecar disabled):
+    // fail closed — never forward raw images to a text-only upstream.
+    const stripped = stripImagesInPlace(parsed);
+    if (stripped) {
+      logCtx.visionSidecarProvider = config.visionSidecar?.provider;
+      logCtx.visionSidecarModel = config.visionSidecar?.model ?? DEFAULT_VISION_MODEL;
+      logCtx.visionSidecarOutcome = "unavailable";
+      logCtx.visionSidecarReason = config.visionSidecar?.enabled === false
+        ? "sidecar_disabled"
+        : config.visionSidecar?.provider ? "configured_provider_unavailable" : "credential_unavailable";
+    }
   }
 
   const recordTerminalOutcomes = options.recordTerminalOutcomes !== false;
@@ -1643,7 +1681,7 @@ export async function handleResponses(
   // Web-search sidecar: Codex enabled web_search but this is a routed (non-OpenAI) model that can't
   // run it server-side. Expose web_search as a function tool and run searches via the gpt-mini sidecar
   // through the ChatGPT passthrough, looping until the model answers. Otherwise take the normal path.
-  const wsPlan = planWebSearch(config, parsed, false, route.provider, route.modelId, openAiSidecar);
+  const wsPlan = planWebSearch(config, parsed, false, route.provider, route.modelId, openAiForwardSidecar);
   if (wsPlan) {
     parsed.context.tools = [...(parsed.context.tools ?? []), buildWebSearchTool()];
     noteAttemptSend(logCtx.activeAttempt, logCtx.usageLogInputTokens);

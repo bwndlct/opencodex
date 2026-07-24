@@ -223,7 +223,7 @@ describe("vision description cache and per-turn cap", () => {
     expect(textParts(request, 1).join("\n")).toContain("caption-a");
   });
 
-  test("separates cache keys by backend, model, detail, and normalized context", async () => {
+  test("separates cache keys by backend, provider, model, detail, and normalized context", async () => {
     let calls = 0;
     globalThis.fetch = (async (url, init) => {
       calls += 1;
@@ -243,11 +243,17 @@ describe("vision description cache and per-turn cap", () => {
     await run(plan({ settings: { model: "vision-model-b", timeoutMs: 5000 } }), "hello world");
     await run(plan(), "different context");
     await run(plan({
+      forwardSidecar: {
+        ...plan().forwardSidecar!,
+        providerName: "company-vision",
+      },
+    }), "hello world");
+    await run(plan({
       backend: "anthropic",
       forwardProvider: undefined,
       anthropicSidecar: { providerName: "anthropic-cache-test", provider: anthropicProvider },
     }), "hello world");
 
-    expect(calls).toBe(5);
+    expect(calls).toBe(6);
   });
 });

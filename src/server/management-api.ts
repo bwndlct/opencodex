@@ -9,6 +9,7 @@ import {
   providerBaseUrlConfigError,
   providerHeadersConfigError,
   saveConfig,
+  visionSidecarProviderConfigError,
 } from "../config";
 import {
   clearLoginState,
@@ -55,6 +56,7 @@ import type { PersistedUsageAttempt } from "../usage/log";
 import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "./auth-cors";
 import { applySystemEnvToggle } from "./system-env";
 import { handleForkEndpoints, type ForkApiDeps } from "./fork-api-handlers";
+import { listOpenAiVisionProviders } from "../vision/openai-provider";
 
 // Single source of truth = package.json (../ from src/), so /healthz + the GUI badge match the
 // installed npm version instead of a stale hardcode.
@@ -80,6 +82,21 @@ export interface ManagementApiDeps {
 /** Narrow an unknown JSON value to a plain (non-array) object for strict request-body validation. */
 function isPlainRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function sidecarSettingsDTO(config: OcxConfig) {
+  const ws = config.webSearchSidecar ?? {};
+  const vs = config.visionSidecar ?? {};
+  return {
+    webSearch: { model: ws.model ?? "gpt-5.6-luna", backend: ws.backend },
+    vision: {
+      model: vs.model ?? "gpt-5.6-luna",
+      backend: vs.backend,
+      provider: vs.provider,
+      availableProviders: listOpenAiVisionProviders(config),
+      maxDescriptionsPerTurn: vs.maxDescriptionsPerTurn,
+    },
+  };
 }
 
 function parseDebugLogQuery(url: URL): { after: number; limit: number } {
@@ -314,16 +331,7 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
   }
 
   if (url.pathname === "/api/sidecar-settings" && req.method === "GET") {
-    const ws = config.webSearchSidecar ?? {};
-    const vs = config.visionSidecar ?? {};
-    return jsonResponse({
-      webSearch: { model: ws.model ?? "gpt-5.6-luna", backend: ws.backend },
-      vision: {
-        model: vs.model ?? "gpt-5.6-luna",
-        backend: vs.backend,
-        maxDescriptionsPerTurn: vs.maxDescriptionsPerTurn,
-      },
-    });
+    return jsonResponse(sidecarSettingsDTO(config));
   }
 
   if (url.pathname === "/api/sidecar-settings" && req.method === "PUT") {
@@ -336,7 +344,7 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
     if (raw.vision !== undefined && !isPlainRecord(raw.vision)) return jsonResponse({ error: "vision must be an object" }, 400);
     const body = raw as {
       webSearch?: { model?: unknown; backend?: unknown; reasoning?: unknown };
-      vision?: { model?: unknown; backend?: unknown; maxDescriptionsPerTurn?: unknown };
+      vision?: { model?: unknown; backend?: unknown; provider?: unknown; maxDescriptionsPerTurn?: unknown };
     };
     if (body.webSearch && body.webSearch.backend !== undefined && body.webSearch.backend !== null
       && body.webSearch.backend !== "openai" && body.webSearch.backend !== "anthropic") {
@@ -352,44 +360,55 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
         || body.vision.maxDescriptionsPerTurn <= 0)) {
       return jsonResponse({ error: "vision.maxDescriptionsPerTurn must be a positive integer" }, 400);
     }
-    if (body.webSearch) {
-      config.webSearchSidecar = { ...config.webSearchSidecar };
-      if (typeof body.webSearch.model === "string") {
-        if (body.webSearch.model === "") delete config.webSearchSidecar.model;
-        else config.webSearchSidecar.model = body.webSearch.model;
-      }
-      if (body.webSearch.backend === null) delete config.webSearchSidecar.backend;
-      else if (body.webSearch.backend === "openai" || body.webSearch.backend === "anthropic") {
-        config.webSearchSidecar.backend = body.webSearch.backend;
-      }
-      if (typeof body.webSearch.reasoning === "string") config.webSearchSidecar.reasoning = body.webSearch.reasoning;
+    if (body.vision && body.vision.provider !== undefined
+      && body.vision.provider !== null && typeof body.vision.provider !== "string") {
+      return jsonResponse({ error: "vision.provider must be a string or null" }, 400);
     }
-    if (body.vision) {
-      config.visionSidecar = { ...config.visionSidecar };
-      if (typeof body.vision.model === "string") {
-        if (body.vision.model === "") delete config.visionSidecar.model;
-        else config.visionSidecar.model = body.vision.model;
+
+    const nextWebSearch = { ...config.webSearchSidecar };
+    if (body.webSearch) {
+      if (typeof body.webSearch.model === "string") {
+        if (body.webSearch.model === "") delete nextWebSearch.model;
+        else nextWebSearch.model = body.webSearch.model;
       }
-      if (body.vision.backend === null) delete config.visionSidecar.backend;
+      if (body.webSearch.backend === null) delete nextWebSearch.backend;
+      else if (body.webSearch.backend === "openai" || body.webSearch.backend === "anthropic") {
+        nextWebSearch.backend = body.webSearch.backend;
+      }
+      if (typeof body.webSearch.reasoning === "string") nextWebSearch.reasoning = body.webSearch.reasoning;
+    }
+
+    const nextVision = { ...config.visionSidecar };
+    if (body.vision) {
+      if (typeof body.vision.model === "string") {
+        if (body.vision.model === "") delete nextVision.model;
+        else nextVision.model = body.vision.model;
+      }
+      if (body.vision.backend === null) delete nextVision.backend;
       else if (body.vision.backend === "openai" || body.vision.backend === "anthropic") {
-        config.visionSidecar.backend = body.vision.backend;
+        nextVision.backend = body.vision.backend;
+      }
+      if (body.vision.provider === null || body.vision.provider === "") {
+        delete nextVision.provider;
+      } else if (typeof body.vision.provider === "string") {
+        nextVision.provider = body.vision.provider;
       }
       if (typeof body.vision.maxDescriptionsPerTurn === "number") {
-        config.visionSidecar.maxDescriptionsPerTurn = body.vision.maxDescriptionsPerTurn;
+        nextVision.maxDescriptionsPerTurn = body.vision.maxDescriptionsPerTurn;
       }
     }
+    const candidate: OcxConfig = {
+      ...config,
+      ...(body.webSearch ? { webSearchSidecar: nextWebSearch } : {}),
+      ...(body.vision ? { visionSidecar: nextVision } : {}),
+    };
+    const visionProviderError = visionSidecarProviderConfigError(candidate, true);
+    if (visionProviderError) return jsonResponse({ error: visionProviderError }, 400);
+
+    if (body.webSearch) config.webSearchSidecar = nextWebSearch;
+    if (body.vision) config.visionSidecar = nextVision;
     saveConfig(config);
-    const ws = config.webSearchSidecar ?? {};
-    const vs = config.visionSidecar ?? {};
-    return jsonResponse({
-      ok: true,
-      webSearch: { model: ws.model ?? "gpt-5.6-luna", backend: ws.backend },
-      vision: {
-        model: vs.model ?? "gpt-5.6-luna",
-        backend: vs.backend,
-        maxDescriptionsPerTurn: vs.maxDescriptionsPerTurn,
-      },
-    });
+    return jsonResponse({ ok: true, ...sidecarSettingsDTO(config) });
   }
 
   if (url.pathname === "/api/shadow-call-settings" && req.method === "GET") {

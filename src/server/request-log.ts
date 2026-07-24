@@ -28,6 +28,8 @@ import {
 import { endRequestActivity } from "./request-activity";
 import { projectIdentityFields, projectOverrideFields } from "./log-field-projection";
 
+export type VisionSidecarOutcome = "described" | "partial" | "failed" | "unavailable";
+
 export interface RequestLogContext {
   model: string;
   provider: string;
@@ -57,6 +59,10 @@ export interface RequestLogContext {
   overrideTargetModel?: string;
   /** Override effort: "inherit" or a fixed value applied to the target. */
   overrideEffort?: string;
+  visionSidecarProvider?: string;
+  visionSidecarModel?: string;
+  visionSidecarOutcome?: VisionSidecarOutcome;
+  visionSidecarReason?: string;
   usage?: OcxUsage;
   usageLogInputTokens?: number;
   attempts?: PersistedUsageAttempt[];
@@ -104,6 +110,10 @@ export interface RequestLogEntry {
   overrideSourceModel?: string;
   overrideTargetModel?: string;
   overrideEffort?: string;
+  visionSidecarProvider?: string;
+  visionSidecarModel?: string;
+  visionSidecarOutcome?: VisionSidecarOutcome;
+  visionSidecarReason?: string;
   status: number;
   durationMs: number;
   errorCode?: string;
@@ -507,6 +517,10 @@ export function addFinalRequestLog(
     ...(logCtx.modelSupportsServiceTier !== undefined ? { modelSupportsServiceTier: logCtx.modelSupportsServiceTier } : {}),
     ...(logCtx.responseServiceTier ? { responseServiceTier: logCtx.responseServiceTier } : {}),
     ...projectOverrideFields(logCtx),
+    ...(logCtx.visionSidecarProvider ? { visionSidecarProvider: logCtx.visionSidecarProvider } : {}),
+    ...(logCtx.visionSidecarModel ? { visionSidecarModel: logCtx.visionSidecarModel } : {}),
+    ...(logCtx.visionSidecarOutcome ? { visionSidecarOutcome: logCtx.visionSidecarOutcome } : {}),
+    ...(logCtx.visionSidecarReason ? { visionSidecarReason: logCtx.visionSidecarReason } : {}),
     status: effectiveStatus,
     durationMs: Date.now() - start,
     ...(logCtx.firstOutputMs !== undefined ? { firstOutputMs: logCtx.firstOutputMs } : {}),

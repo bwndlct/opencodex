@@ -846,7 +846,7 @@ button.prov-account-row.active { cursor: default; }
     display: flex; align-items: center; gap: 2px;
     padding: 4px 10px; min-width: 0;
     border-bottom: 1px solid var(--border);
-    background: var(--glass-rail);
+    background: var(--bg);
     backdrop-filter: var(--glass-blur);
     -webkit-backdrop-filter: var(--glass-blur);
   }

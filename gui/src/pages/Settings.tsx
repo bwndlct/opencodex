@@ -7,12 +7,16 @@ import type { NavigationVisibility, OptionalNavPage } from "../navigation-prefer
 
 type RoutePolicy = "personal_first" | "company_first";
 
+type SecondarySourceKind = "api_key_ready" | "api_key_unavailable" | "legacy_passthrough" | "invalid";
+
 interface RoutingSettings {
   openAiDualUpstream: {
     companyProvider: string;
     defaultPolicy: RoutePolicy;
     autoSwitchToCompany: boolean;
+    secondarySourceKind: SecondarySourceKind;
   } | null;
+  apiKeyProviders: string[];
   companyProviders: string[];
   canEnableDualUpstream: boolean;
   lunaReasoningMaxModels: string[];
@@ -30,6 +34,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isRoutePolicy(value: unknown): value is RoutePolicy {
   return value === "personal_first" || value === "company_first";
 }
+function isSecondarySourceKind(value: unknown): value is SecondarySourceKind {
+  return value === "api_key_ready" || value === "api_key_unavailable" || value === "legacy_passthrough" || value === "invalid";
+}
 
 function readModelList(value: unknown, fallback: string[]): string[] {
   if (!Array.isArray(value)) return fallback;
@@ -39,22 +46,31 @@ function readModelList(value: unknown, fallback: string[]): string[] {
 }
 
 function readRoutingSettings(value: unknown): RoutingSettings | null {
-  if (!isRecord(value) || !Array.isArray(value.companyProviders)) return null;
+  if (!isRecord(value)) return null;
+  const companyProviders = Array.isArray(value.companyProviders)
+    ? value.companyProviders.filter((provider): provider is string => typeof provider === "string")
+    : [];
+  const apiKeyProviders = Array.isArray(value.apiKeyProviders)
+    ? value.apiKeyProviders.filter((provider): provider is string => typeof provider === "string")
+    : companyProviders;
   const rawDual = value.openAiDualUpstream;
   let dual: RoutingSettings["openAiDualUpstream"] = null;
   if (rawDual !== null && rawDual !== undefined) {
     if (!isRecord(rawDual) || typeof rawDual.companyProvider !== "string" || !isRoutePolicy(rawDual.defaultPolicy)) return null;
+    if (!isSecondarySourceKind(rawDual.secondarySourceKind)) return null;
     dual = {
       companyProvider: rawDual.companyProvider,
       defaultPolicy: rawDual.defaultPolicy,
       autoSwitchToCompany: rawDual.autoSwitchToCompany !== false,
+      secondarySourceKind: rawDual.secondarySourceKind,
     };
   }
   if (typeof value.canEnableDualUpstream !== "boolean") return null;
   if (value.appliesTo !== "future_requests") return null;
   return {
     openAiDualUpstream: dual,
-    companyProviders: value.companyProviders.filter((provider): provider is string => typeof provider === "string"),
+    companyProviders,
+    apiKeyProviders,
     canEnableDualUpstream: value.canEnableDualUpstream,
     lunaReasoningMaxModels: readModelList(value.lunaReasoningMaxModels, DEFAULT_LUNA_MODELS),
     glmReasoningMaxModels: readModelList(value.glmReasoningMaxModels, DEFAULT_GLM_MODELS),
@@ -84,8 +100,9 @@ export default function Settings({
   const [errorMessage, setErrorMessage] = useState("");
   const [dualEnabled, setDualEnabled] = useState(false);
   const [companyProvider, setCompanyProvider] = useState("");
-  const [defaultPolicy, setDefaultPolicy] = useState<RoutePolicy>("company_first");
-  const [autoSwitchToCompany, setAutoSwitchToCompany] = useState(true);
+  const [defaultPolicy, setDefaultPolicy] = useState<RoutePolicy>("personal_first");
+  const [autoSwitchToCompany, setAutoSwitchToCompany] = useState(false);
+  const [secondarySourceKind, setSecondarySourceKind] = useState<SecondarySourceKind>("invalid");
   const [lunaEnabled, setLunaEnabled] = useState(true);
   const [glmEnabled, setGlmEnabled] = useState(true);
   const [lunaText, setLunaText] = useState(DEFAULT_LUNA_MODELS.join(", "));
@@ -94,9 +111,10 @@ export default function Settings({
   const applySettings = useCallback((next: RoutingSettings) => {
     setSettings(next);
     setDualEnabled(next.openAiDualUpstream !== null);
-    setCompanyProvider(next.openAiDualUpstream?.companyProvider ?? next.companyProviders[0] ?? "");
-    setDefaultPolicy(next.openAiDualUpstream?.defaultPolicy ?? "company_first");
-    setAutoSwitchToCompany(next.openAiDualUpstream?.autoSwitchToCompany ?? true);
+    setCompanyProvider(next.openAiDualUpstream?.companyProvider ?? next.apiKeyProviders[0] ?? next.companyProviders[0] ?? "");
+    setDefaultPolicy(next.openAiDualUpstream?.defaultPolicy ?? "personal_first");
+    setAutoSwitchToCompany(next.openAiDualUpstream?.autoSwitchToCompany ?? false);
+    setSecondarySourceKind(next.openAiDualUpstream?.secondarySourceKind ?? "invalid");
     setLunaEnabled(next.lunaReasoningMaxModels.length > 0);
     setGlmEnabled(next.glmReasoningMaxModels.length > 0);
     setLunaText(next.lunaReasoningMaxModels.join(", "));
@@ -127,14 +145,48 @@ export default function Settings({
     return () => window.clearTimeout(timer);
   }, [load]);
 
+  const isLegacyPassthrough = secondarySourceKind === "legacy_passthrough";
+  const isSourceUnavailable = secondarySourceKind === "api_key_unavailable" || secondarySourceKind === "invalid";
+
   const companyOptions = useMemo(() => {
-    const options = settings?.companyProviders ?? [];
+    const ready = settings?.apiKeyProviders ?? [];
+    const options = ready.map(provider => ({ value: provider, label: provider }));
+    const legacyLabel = t("settings.routing.openai.legacyProvider");
+    if (isLegacyPassthrough && companyProvider && !ready.includes(companyProvider)) {
+      options.push({ value: companyProvider, label: `${companyProvider} (${legacyLabel})` });
+    }
     return options.length > 0
-      ? options.map(provider => ({ value: provider, label: provider }))
+      ? options
       : [{ value: "", label: t("settings.routing.noCompanyProvider") }];
-  }, [settings?.companyProviders, t]);
-  const hasCompanyProviders = (settings?.companyProviders.length ?? 0) > 0;
-  const dualControlsEnabled = Boolean(dualEnabled && settings?.canEnableDualUpstream && hasCompanyProviders);
+  }, [settings?.apiKeyProviders, companyProvider, isLegacyPassthrough, t]);
+  const hasApiKeyProviders = (settings?.apiKeyProviders.length ?? 0) > 0;
+  const selectedApiKeyReady = settings?.apiKeyProviders.includes(companyProvider) ?? false;
+  const preservingLegacy = Boolean(
+    dualEnabled
+    && isLegacyPassthrough
+    && settings?.openAiDualUpstream?.companyProvider === companyProvider,
+  );
+  const providerSelectEnabled = Boolean(dualEnabled && settings?.canEnableDualUpstream && hasApiKeyProviders);
+  const priorityControlsEnabled = Boolean(providerSelectEnabled && selectedApiKeyReady);
+
+  const toggleDual = () => {
+    if (dualEnabled) {
+      setDualEnabled(false);
+      return;
+    }
+    const provider = settings?.apiKeyProviders[0] ?? "";
+    setDualEnabled(true);
+    setCompanyProvider(provider);
+    setDefaultPolicy("personal_first");
+    setAutoSwitchToCompany(false);
+    setSecondarySourceKind(provider ? "api_key_ready" : "invalid");
+  };
+
+  const selectApiKeyProvider = (provider: string) => {
+    setCompanyProvider(provider);
+    setSecondarySourceKind("api_key_ready");
+    setAutoSwitchToCompany(false);
+  };
 
   const toggleLuna = () => {
     if (!lunaEnabled && parseModelText(lunaText).length === 0) setLunaText(DEFAULT_LUNA_MODELS.join(", "));
@@ -160,9 +212,14 @@ export default function Settings({
       setErrorMessage(t("settings.routing.modelListRequired"));
       return;
     }
-    if (dualEnabled && (!settings.canEnableDualUpstream || !companyProvider)) {
+    if (dualEnabled && !selectedApiKeyReady && !preservingLegacy) {
       setNotice("error");
       setErrorMessage(t("settings.routing.dualUnavailable"));
+      return;
+    }
+    if (dualEnabled && isSourceUnavailable && !selectedApiKeyReady) {
+      setNotice("error");
+      setErrorMessage(t("settings.routing.openai.sourceUnavailable"));
       return;
     }
     setSaving(true);
@@ -173,7 +230,11 @@ export default function Settings({
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          openAiDualUpstream: dualEnabled ? { companyProvider, defaultPolicy, autoSwitchToCompany } : null,
+          openAiDualUpstream: dualEnabled ? {
+            companyProvider,
+            defaultPolicy,
+            autoSwitchToCompany: preservingLegacy ? autoSwitchToCompany : false,
+          } : null,
           lunaReasoningMaxModels: lunaModels,
           glmReasoningMaxModels: glmModels,
         }),
@@ -238,29 +299,27 @@ export default function Settings({
             <h2 id="settings-openai-title">{t("settings.routing.openai.title")}</h2>
             <p className="muted">{t("settings.routing.openai.subtitle")}</p>
           </div>
-          <Switch on={dualEnabled} onClick={() => setDualEnabled(value => !value)} disabled={!settings.canEnableDualUpstream || !hasCompanyProviders}
+          <Switch on={dualEnabled} onClick={toggleDual} disabled={!dualEnabled && (!settings.canEnableDualUpstream || !hasApiKeyProviders)}
             label={t("settings.routing.openai.enabled")} />
         </div>
-        {(!settings.canEnableDualUpstream || !hasCompanyProviders) && <div className="settings-inline-warning"><IconInfo />{t("settings.routing.openai.unavailable")}</div>}
+        {!dualEnabled && (!settings.canEnableDualUpstream || !hasApiKeyProviders) && <div className="settings-inline-warning"><IconInfo />{t("settings.routing.openai.unavailable")}</div>}
+        {dualEnabled && !settings.canEnableDualUpstream && !isLegacyPassthrough && <div className="settings-inline-warning"><IconInfo />{t("settings.routing.dualUnavailable")}</div>}
         <div className="settings-rows">
           <div className="settings-row">
             <div><strong>{t("settings.routing.openai.companyProvider")}</strong><span className="muted">{t("settings.routing.openai.companyProviderHint")}</span></div>
-            <Select value={companyProvider} options={companyOptions} onChange={setCompanyProvider} disabled={!dualControlsEnabled}
+            <Select value={companyProvider} options={companyOptions} onChange={selectApiKeyProvider} disabled={!providerSelectEnabled}
               label={t("settings.routing.openai.companyProvider")} />
           </div>
+          {dualEnabled && isLegacyPassthrough && <div className="settings-inline-warning"><IconInfo />{t("settings.routing.openai.legacyNotice")}</div>}
+          {dualEnabled && isSourceUnavailable && <div className="settings-inline-warning"><IconInfo />{t("settings.routing.openai.sourceUnavailable")}</div>}
           <div className="settings-row">
             <div><strong>{t("settings.routing.openai.defaultPolicy")}</strong><span className="muted">{t("settings.routing.openai.defaultPolicyHint")}</span></div>
             <div className="usage-segmented" role="group" aria-label={t("settings.routing.openai.defaultPolicy")}>
               <button type="button" className={`usage-segmented-btn${defaultPolicy === "personal_first" ? " active" : ""}`} aria-pressed={defaultPolicy === "personal_first"}
-                disabled={!dualControlsEnabled} onClick={() => setDefaultPolicy("personal_first")}>{t("settings.routing.openai.personalFirst")}</button>
+                disabled={!priorityControlsEnabled} onClick={() => setDefaultPolicy("personal_first")}>{t("settings.routing.openai.personalFirst")}</button>
               <button type="button" className={`usage-segmented-btn${defaultPolicy === "company_first" ? " active" : ""}`} aria-pressed={defaultPolicy === "company_first"}
-                disabled={!dualControlsEnabled} onClick={() => setDefaultPolicy("company_first")}>{t("settings.routing.openai.companyFirst")}</button>
+                disabled={!priorityControlsEnabled} onClick={() => setDefaultPolicy("company_first")}>{t("settings.routing.openai.companyFirst")}</button>
             </div>
-          </div>
-          <div className="settings-row">
-            <div><strong>{t("settings.routing.openai.autoSwitch")}</strong><span className="muted">{t("settings.routing.openai.autoSwitchHint")}</span></div>
-            <Switch on={autoSwitchToCompany} onClick={() => setAutoSwitchToCompany(value => !value)} disabled={!dualControlsEnabled}
-              label={t("settings.routing.openai.autoSwitch")} />
           </div>
         </div>
       </section>

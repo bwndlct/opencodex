@@ -1,6 +1,7 @@
 /**
  * Goal: verify that src/config.ts loads valid OpenAI dual-upstream and max-reasoning settings,
  * while rejecting invalid routing combinations, model lists, and passthrough secret storage.
+ * Also verifies that API-key (authMode=key) company providers are accepted alongside legacy passthrough.
  * Strategy: use isolated on-disk configs and assert the public load/diagnostics APIs as a black box.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -134,14 +135,36 @@ describe("OpenAI dual-upstream config validation", () => {
   });
 
   test("rejects a companyProvider that does not use passthrough auth", async () => {
+    // authMode=key is now accepted (the management layer classifies it as
+    // api_key_ready or api_key_unavailable). Only truly unsupported authModes
+    // (e.g. "oauth") are still rejected at the config level.
     await writeConfig(dualConfig({
       providers: {
-        company: { adapter: "openai-responses", baseUrl: "https://company.example/v1", authMode: "key" },
+        company: { adapter: "openai-responses", baseUrl: "https://company.example/v1", authMode: "oauth" },
       },
     }));
 
-    expectSchemaRejected("companyProvider must use the openai-responses adapter with authMode passthrough");
+    expectSchemaRejected("companyProvider must use the openai-responses adapter with authMode passthrough or key");
   });
+
+  test("accepts an API-key company provider with authMode=key", async () => {
+    await writeConfig(dualConfig({
+      providers: {
+        company: {
+          adapter: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          authMode: "key",
+          apiKey: "sk-company-test-key",
+        },
+      },
+    }));
+
+    const diagnostics = readConfigDiagnostics();
+    expect(diagnostics.source).toBe("file");
+    expect(diagnostics.error).toBeNull();
+    expect(diagnostics.config.openAiDualUpstream?.companyProvider).toBe("company");
+  });
+
 
   test("rejects a personal openai provider that is not canonical forward", async () => {
     for (const openai of [
@@ -208,5 +231,21 @@ describe("OpenAI dual-upstream config validation", () => {
       }));
       expectSchemaRejected("passthrough providers must not store API keys");
     }
+  });
+  test("key-auth company provider can store an API key (passthrough-only restriction does not apply)", async () => {
+    await writeConfig(dualConfig({
+      providers: {
+        company: {
+          adapter: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          authMode: "key",
+          apiKey: "sk-company-test-key",
+        },
+      },
+    }));
+
+    const loaded = loadConfig();
+    expect(loaded.providers.company?.authMode).toBe("key");
+    expect(loaded.providers.company?.apiKey).toBe("sk-company-test-key");
   });
 });

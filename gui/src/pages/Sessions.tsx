@@ -107,11 +107,13 @@ function PolicyControl({
   rootSessionId,
   state,
   onChange,
+  routeDisabled,
   t,
 }: {
   rootSessionId: string;
   state: PolicyState;
   onChange: (rootSessionId: string, policy: SessionRoutePolicy) => void;
+  routeDisabled?: boolean;
   t: TFn;
 }) {
   return (
@@ -120,6 +122,7 @@ function PolicyControl({
         className="usage-segmented session-policy-control"
         role="group"
         aria-label={t("sessions.policy.aria")}
+        title={routeDisabled ? t("sessions.policy.lockedTitle") : undefined}
         onClick={e => e.stopPropagation()}
       >
         {(["inherit", "personal_first", "company_first"] as const).map(policy => (
@@ -128,7 +131,7 @@ function PolicyControl({
             type="button"
             className={`usage-segmented-btn${state.policy === policy ? " active" : ""}`}
             aria-pressed={state.policy === policy}
-            disabled={state.pending}
+            disabled={state.pending || routeDisabled}
             onClick={() => onChange(rootSessionId, policy)}
           >
             {t(policy === "inherit"
@@ -157,6 +160,7 @@ function ActiveSessionRow({
   expanded,
   onToggle,
   apiBase,
+  routeDisabled,
   t,
 }: {
   session: ActiveSession;
@@ -171,6 +175,7 @@ function ActiveSessionRow({
   expanded: boolean;
   onToggle: (rootSessionId: string) => void;
   apiBase: string;
+  routeDisabled?: boolean;
   t: TFn;
 }) {
   const tokens = tokenDisplay(totalTokens, estimatedRequests, unmeteredRequests, measuredRequests, locale, t);
@@ -211,7 +216,7 @@ function ActiveSessionRow({
       <td className="num mono">
         {tokens ? <span title={tokens.title}>{tokens.text}</span> : <span className="muted">{"\u2014"}</span>}
       </td>
-      <td><PolicyControl rootSessionId={session.rootSessionId} state={policy} onChange={onPolicy} t={t} /></td>
+      <td><PolicyControl rootSessionId={session.rootSessionId} state={policy} onChange={onPolicy} routeDisabled={routeDisabled} t={t} /></td>
       </tr>
       {expanded && (
         <tr className="session-detail-row">
@@ -232,6 +237,7 @@ function RecentSessionRow({
   expanded,
   onToggle,
   apiBase,
+  routeDisabled,
   t,
 }: {
   session: RecentSession;
@@ -241,6 +247,7 @@ function RecentSessionRow({
   expanded: boolean;
   onToggle: (rootSessionId: string) => void;
   apiBase: string;
+  routeDisabled?: boolean;
   t: TFn;
 }) {
   const tokens = tokenDisplay(
@@ -286,7 +293,7 @@ function RecentSessionRow({
       <td className="num mono">
         {tokens ? <span title={tokens.title}>{tokens.text}</span> : <span className="muted">{"\u2014"}</span>}
       </td>
-     <td><PolicyControl rootSessionId={session.rootSessionId} state={policy} onChange={onPolicy} t={t} /></td>
+     <td><PolicyControl rootSessionId={session.rootSessionId} state={policy} onChange={onPolicy} routeDisabled={routeDisabled} t={t} /></td>
      </tr>
      {expanded && (
        <tr className="session-detail-row">
@@ -314,12 +321,30 @@ export default function Sessions({ apiBase }: { apiBase: string }) {
   const historyRef = useRef<SessionHistoryEntry[]>([]);
   const historyLoadedAtRef = useRef(0);
   const [expandedSession, setExpandedSession] = useState<string | null>(null);
+  const [routeDisabled, setRouteDisabled] = useState(true);
 
   const updatePolicies = useCallback((update: (current: Record<string, PolicyState>) => Record<string, PolicyState>) => {
     const next = update(policyRef.current);
     policyRef.current = next;
     setPolicies(next);
   }, []);
+
+  const loadRouteAvailability = useCallback(async (signal?: AbortSignal) => {
+    try {
+      const response = await fetch(`${apiBase}/api/routing-settings`, { signal });
+      if (!response.ok) { setRouteDisabled(true); return; }
+      const body: unknown = await response.json();
+      if (!body || typeof body !== "object") { setRouteDisabled(true); return; }
+      const settings = body as { openAiDualUpstream?: unknown; canEnableDualUpstream?: unknown };
+      const dual = settings.openAiDualUpstream;
+      const kind = dual && typeof dual === "object" ? (dual as { secondarySourceKind?: unknown }).secondarySourceKind : undefined;
+      // Controls stay enabled only when dual routing is configured with a ready API key.
+      // Absent, legacy-only, unavailable, invalid, or malformed payloads all lock controls.
+      setRouteDisabled(settings.canEnableDualUpstream !== true || dual == null || kind !== "api_key_ready");
+    } catch {
+      setRouteDisabled(true);
+    }
+  }, [apiBase]);
 
   const loadPolicy = useCallback(async (rootSessionId: string, signal?: AbortSignal) => {
     if (policyRef.current[rootSessionId]) return;
@@ -399,15 +424,17 @@ export default function Sessions({ apiBase }: { apiBase: string }) {
   useEffect(() => {
     const controller = new AbortController();
     const timeout = window.setTimeout(() => void loadSessions(controller.signal, true), 0);
+    const routeTimer = window.setTimeout(() => void loadRouteAvailability(controller.signal), 0);
     const interval = window.setInterval(() => {
       if (document.visibilityState === "visible") void loadSessions(controller.signal);
     }, 2000);
     return () => {
       window.clearTimeout(timeout);
+      window.clearTimeout(routeTimer);
       window.clearInterval(interval);
       controller.abort();
     };
-  }, [loadSessions]);
+  }, [loadSessions, loadRouteAvailability]);
 
   const changePolicy = useCallback(async (rootSessionId: string, policy: SessionRoutePolicy) => {
     const previous = policyRef.current[rootSessionId]?.policy ?? "inherit";
@@ -513,6 +540,7 @@ export default function Sessions({ apiBase }: { apiBase: string }) {
                       expanded={expandedSession === session.rootSessionId}
                       onToggle={toggleSession}
                       apiBase={apiBase}
+                     routeDisabled={routeDisabled}
                      t={t}
                    />
                  ))}</tbody>
@@ -548,6 +576,7 @@ export default function Sessions({ apiBase }: { apiBase: string }) {
                       expanded={expandedSession === session.rootSessionId}
                       onToggle={toggleSession}
                       apiBase={apiBase}
+                     routeDisabled={routeDisabled}
                      t={t}
                    />
                  ))}</tbody>

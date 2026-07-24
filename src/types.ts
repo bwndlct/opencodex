@@ -488,11 +488,22 @@ export interface OcxConfig {
   upstreamFailoverThreshold?: number;
   /** Optional dual-upstream routing for bare OpenAI models. */
   openAiDualUpstream?: {
-    /** Configured provider that forwards the caller-owned company credential. */
+    /**
+     * Configured company source provider. Must use the `openai-responses` adapter with
+     * `authMode="passthrough"` (legacy) or `authMode="key"` (new API-key source). Must not
+     * be the canonical `openai` forward provider.
+     */
     companyProvider: string;
-    /** Route used when a root Session has no explicit override. */
+    /**
+     * Route used when a root Session has no explicit override. When omitted the default is
+     * source-aware: `personal_first` for API-key company sources, `company_first` for legacy
+     * passthrough sources.
+     */
     defaultPolicy?: "personal_first" | "company_first";
-    /** Persist company_first after the personal pool is exhausted. Default true. */
+    /**
+     * Persist company_first after the personal pool is exhausted. Default is source-aware:
+     * `false` for API-key company sources, `true` for legacy passthrough sources.
+     */
     autoSwitchToCompany?: boolean;
   };
   /** Virtual `combo/<id>` models spanning concrete provider/model targets (issue #133). */

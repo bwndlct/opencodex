@@ -16,6 +16,8 @@ import { clearAccountNeedsReauth, clearAccountQuota } from "../src/codex/auth-ap
 import { clearCodexUpstreamHealth, clearThreadAccountMap } from "../src/codex/routing";
 import { saveCodexAccountCredential } from "../src/codex/account-store";
 import {
+  classifyOpenAiSecondarySource,
+  effectiveOpenAiAutoSwitch,
   effectiveOpenAiRoutePolicy,
   isBareOpenAiModel,
   runOpenAiDualUpstream,
@@ -24,7 +26,7 @@ import {
   type OpenAiDualUpstream,
 } from "../src/server/openai-dual-upstream";
 import { resetSessionRoutePolicyStoreForTests } from "../src/server/session-route-policy";
-import { handleResponses } from "../src/server/responses";
+import { handleResponses, handleResponsesCompact } from "../src/server/responses";
 import type { OcxConfig } from "../src/types";
 
 type DualRoutePolicy = "personal_first" | "company_first";
@@ -202,6 +204,40 @@ describe("OpenAI dual-upstream public helpers", () => {
     expect(effectiveOpenAiRoutePolicy(config, "inherit")).toBe("company_first");
   });
 
+  test("uses source-aware defaults and classifies ready candidates before selection", () => {
+    const config = dualConfig();
+    config.providers.company = {
+      adapter: "openai-responses",
+      baseUrl: "https://company.example/v1",
+      authMode: "key",
+      apiKey: "sk-company-key",
+    };
+    config.providers.alternate = { ...config.providers.company };
+    delete config.openAiDualUpstream?.defaultPolicy;
+    if (config.openAiDualUpstream) config.openAiDualUpstream.autoSwitchToCompany = true;
+
+    expect(classifyOpenAiSecondarySource(config, "alternate")).toBe("api_key_ready");
+    expect(effectiveOpenAiRoutePolicy(config, "inherit")).toBe("personal_first");
+    expect(effectiveOpenAiAutoSwitch(config)).toBe(false);
+
+    config.providers.company = {
+      adapter: "openai-responses",
+      baseUrl: "https://legacy.example/v1",
+      authMode: "passthrough",
+    };
+    delete config.openAiDualUpstream?.autoSwitchToCompany;
+    expect(effectiveOpenAiRoutePolicy(config, "inherit")).toBe("company_first");
+    expect(effectiveOpenAiAutoSwitch(config)).toBe(true);
+
+    config.providers.company = {
+      adapter: "openai-responses",
+      baseUrl: "https://company.example/v1",
+      authMode: "key",
+      apiKey: "   ",
+    };
+    expect(classifyOpenAiSecondarySource(config, "company")).toBe("api_key_unavailable");
+  });
+
   test("requires dual-upstream configuration", async () => {
     const config = dualConfig();
     delete config.openAiDualUpstream;
@@ -255,6 +291,28 @@ describe("runOpenAiDualUpstream route order", () => {
     expect(result.fallbackReason).toBe("company_upstream_unavailable");
     expect(company.lifecycle).toEqual({ commits: 0, discards: 1 });
     expect(personal.lifecycle).toEqual({ commits: 1, discards: 0 });
+  });
+
+  test("does not call an API-key upstream without an active key", async () => {
+    const config = dualConfig({ defaultPolicy: "company_first" });
+    config.providers.company = {
+      adapter: "openai-responses",
+      baseUrl: "https://company.example/v1",
+      authMode: "key",
+    };
+    const personal = trackedAttempt(successResponse("personal-after-missing-key"));
+    const runner = new FakeOpenAiDualAttemptRunner([personal]);
+
+    const result = await runOpenAiDualUpstream(config, "inherit", runner.run);
+
+    expect(runner.calls).toEqual([{
+      upstream: "personal",
+      providerName: "openai",
+      excludedAccountIds: [],
+    }]);
+    expect(result.upstream).toBe("personal");
+    expect(result.fallbackReason).toBe("company_upstream_unavailable");
+    expect(await result.response.text()).toBe("personal-after-missing-key");
   });
 });
 
@@ -410,8 +468,9 @@ describe("runOpenAiDualUpstream automatic switching", () => {
     await expect(readFile(getConfigPath(), "utf8")).rejects.toThrow();
   });
 
-  const hotReloadChanges: Array<"companyProvider" | "defaultPolicy" | "autoSwitchToCompany"> = [
+  const hotReloadChanges: Array<"companyProvider" | "providerAuthMode" | "defaultPolicy" | "autoSwitchToCompany"> = [
     "companyProvider",
+    "providerAuthMode",
     "defaultPolicy",
     "autoSwitchToCompany",
   ];
@@ -423,6 +482,12 @@ describe("runOpenAiDualUpstream automatic switching", () => {
       if (change === "companyProvider") {
         updatedConfig.providers.alternateCompany = { ...updatedConfig.providers.company };
         updatedConfig.openAiDualUpstream.companyProvider = "alternateCompany";
+      } else if (change === "providerAuthMode") {
+        updatedConfig.providers.company = {
+          ...updatedConfig.providers.company,
+          authMode: "key",
+          apiKey: "sk-company-key",
+        };
       } else if (change === "defaultPolicy") {
         updatedConfig.openAiDualUpstream.defaultPolicy = "company_first";
       } else {
@@ -535,6 +600,243 @@ describe("handleResponses dual-upstream account handoff", () => {
     } finally {
       globalThis.fetch = originalFetch;
       personalUpstream.stop();
+      companyUpstream.stop();
+    }
+  });
+});
+
+describe("Account vs API Key dual-upstream routing", () => {
+  test("company API-key path sends only the provider key and never forwards caller Authorization or account id", async () => {
+    const companyRequests: Array<{ authorization: string | null; accountId: string | null; organization: string | null }> = [];
+    const companyUpstream = Bun.serve({
+      port: 0,
+      fetch(request) {
+        companyRequests.push({
+          authorization: request.headers.get("authorization"),
+          accountId: request.headers.get("chatgpt-account-id"),
+          organization: request.headers.get("openai-organization"),
+        });
+        return Response.json({
+          id: "company-api-response",
+          object: "response",
+          status: "completed",
+          model: "gpt-5.5",
+          output: [],
+        });
+      },
+    });
+    const originalFetch = globalThis.fetch;
+
+    const config = dualConfig({
+      defaultPolicy: "company_first",
+      companyBaseUrl: `${companyUpstream.url.toString().replace(/\/$/, "")}/v1`,
+    });
+    // Company provider uses API-key auth instead of passthrough.
+    config.providers.company = {
+      adapter: "openai-responses",
+      baseUrl: `${companyUpstream.url.toString().replace(/\/$/, "")}/v1`,
+      authMode: "key",
+      apiKey: "sk-company-key",
+      allowPrivateNetwork: true,
+    };
+
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: "Bearer caller-token",
+          "chatgpt-account-id": "caller-account",
+          "openai-organization": "caller-org",
+          "x-codex-session-id": "apikey-root",
+        },
+        body: JSON.stringify({ model: "gpt-5.5", input: "hello", stream: false }),
+      }), config, { model: "", provider: "" });
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ id: "company-api-response" });
+      expect(companyRequests).toHaveLength(1);
+      // The API-key path uses ONLY the configured provider key — caller auth is never forwarded.
+      expect(companyRequests[0]!.authorization).toBe("Bearer sk-company-key");
+      expect(companyRequests[0]!.accountId).toBeNull();
+      expect(companyRequests[0]!.organization).toBeNull();
+    } finally {
+      globalThis.fetch = originalFetch;
+      companyUpstream.stop();
+    }
+  });
+
+  test("company API-key path sends the same provider key for responses/compact", async () => {
+    const companyRequests: Array<{ authorization: string | null; accountId: string | null }> = [];
+    const companyUpstream = Bun.serve({
+      port: 0,
+      fetch(request) {
+        companyRequests.push({
+          authorization: request.headers.get("authorization"),
+          accountId: request.headers.get("chatgpt-account-id"),
+        });
+        return Response.json({ output: [] });
+      },
+    });
+    const originalFetch = globalThis.fetch;
+
+    const config = dualConfig({
+      defaultPolicy: "company_first",
+      companyBaseUrl: `${companyUpstream.url.toString().replace(/\/$/, "")}/v1`,
+    });
+    config.providers.company = {
+      adapter: "openai-responses",
+      baseUrl: `${companyUpstream.url.toString().replace(/\/$/, "")}/v1`,
+      authMode: "key",
+      apiKey: "sk-company-key",
+      allowPrivateNetwork: true,
+    };
+
+    try {
+      const response = await handleResponsesCompact(new Request("http://localhost/v1/responses/compact", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: "Bearer caller-token",
+          "chatgpt-account-id": "caller-account",
+          "x-codex-session-id": "apikey-compact-root",
+        },
+        body: JSON.stringify({ model: "gpt-5.5", input: [] }),
+      }), config, { model: "", provider: "" });
+
+      expect(response.status).toBe(200);
+      expect(companyRequests).toHaveLength(1);
+      expect(companyRequests[0]!.authorization).toBe("Bearer sk-company-key");
+      expect(companyRequests[0]!.accountId).toBeNull();
+    } finally {
+      globalThis.fetch = originalFetch;
+      companyUpstream.stop();
+    }
+  });
+
+  test("personal_first with company API-key fallback crosses source on personal exhaustion", async () => {
+    const personalRequests: Array<{ authorization: string | null; accountId: string | null }> = [];
+    const companyRequests: Array<{ authorization: string | null; accountId: string | null }> = [];
+    const personalUpstream = Bun.serve({
+      port: 0,
+      fetch(request) {
+        personalRequests.push({
+          authorization: request.headers.get("authorization"),
+          accountId: request.headers.get("chatgpt-account-id"),
+        });
+        return new Response(null, { status: 401 });
+      },
+    });
+    const companyUpstream = Bun.serve({
+      port: 0,
+      fetch(request) {
+        companyRequests.push({
+          authorization: request.headers.get("authorization"),
+          accountId: request.headers.get("chatgpt-account-id"),
+        });
+        return Response.json({
+          id: "company-after-personal",
+          object: "response",
+          status: "completed",
+          model: "gpt-5.5",
+          output: [],
+        });
+      },
+    });
+    const originalFetch = globalThis.fetch;
+
+    saveCodexAccountCredential("personal-a", {
+      accessToken: "personal-access",
+      refreshToken: "personal-refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "chatgpt-personal-a",
+    });
+    const config = dualConfig({
+      defaultPolicy: "personal_first",
+      companyBaseUrl: `${companyUpstream.url.toString().replace(/\/$/, "")}/v1`,
+    });
+    config.providers.company = {
+      adapter: "openai-responses",
+      baseUrl: `${companyUpstream.url.toString().replace(/\/$/, "")}/v1`,
+      authMode: "key",
+      apiKey: "sk-company-key",
+      allowPrivateNetwork: true,
+    };
+    config.codexAccounts = [
+      { id: "personal-a", email: "a@example.test", isMain: false, chatgptAccountId: "chatgpt-personal-a" },
+    ];
+    config.activeCodexAccountId = "personal-a";
+    config.autoSwitchThreshold = 0;
+
+    globalThis.fetch = async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url === "https://chatgpt.com/backend-api/codex/responses") {
+        return originalFetch(`${personalUpstream.url.toString().replace(/\/$/, "")}/v1/responses`, init);
+      }
+      return originalFetch(input, init);
+    };
+
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-codex-session-id": "cross-source-root" },
+        body: JSON.stringify({ model: "gpt-5.5", input: "hello", stream: false }),
+      }), config, { model: "", provider: "" });
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ id: "company-after-personal" });
+      // Personal tried with pool bearer, crossed to company with API key.
+      expect(personalRequests).toHaveLength(1);
+      expect(personalRequests[0]!.authorization).toBe("Bearer personal-access");
+      expect(personalRequests[0]!.accountId).toBe("chatgpt-personal-a");
+      expect(companyRequests).toHaveLength(1);
+      expect(companyRequests[0]!.authorization).toBe("Bearer sk-company-key");
+      expect(companyRequests[0]!.accountId).toBeNull();
+    } finally {
+      globalThis.fetch = originalFetch;
+      personalUpstream.stop();
+      companyUpstream.stop();
+    }
+  });
+
+  test("non-retryable 4xx on company API-key does not cross source to personal", async () => {
+    const companyRequests: number[] = [];
+    const companyUpstream = Bun.serve({
+      port: 0,
+      fetch() {
+        companyRequests.push(1);
+        return new Response(JSON.stringify({ error: { message: "bad request" } }), {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+    const originalFetch = globalThis.fetch;
+
+    const config = dualConfig({
+      defaultPolicy: "company_first",
+      companyBaseUrl: `${companyUpstream.url.toString().replace(/\/$/, "")}/v1`,
+    });
+    config.providers.company = {
+      adapter: "openai-responses",
+      baseUrl: `${companyUpstream.url.toString().replace(/\/$/, "")}/v1`,
+      authMode: "key",
+      apiKey: "sk-company-key",
+      allowPrivateNetwork: true,
+    };
+
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-codex-session-id": "non-retryable-root" },
+        body: JSON.stringify({ model: "gpt-5.5", input: "hello", stream: false }),
+      }), config, { model: "", provider: "" });
+
+      expect(response.status).toBe(400);
+      expect(companyRequests).toHaveLength(1);
+      // personal upstream is never called: no pool credentials exist and the company 400 is non-retryable.
+    } finally {
+      globalThis.fetch = originalFetch;
       companyUpstream.stop();
     }
   });

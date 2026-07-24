@@ -1001,7 +1001,7 @@ export const zh: Record<TKey, string> = {
   "sessions.col.execution": "执行",
   "sessions.col.model": "模型",
   "sessions.col.policy": "策略",
-  "sessions.col.tokens": "Token 数",
+  "sessions.col.tokens": "累计 Token",
   "sessions.activeRequests": "{count} 个活动请求",
   "sessions.source.gpt": "{count}GPT",
   "sessions.source.glm": "{count}GLM",

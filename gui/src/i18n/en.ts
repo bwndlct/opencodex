@@ -1003,7 +1003,7 @@ export const en = {
   "sessions.col.execution": "Execution",
   "sessions.col.model": "Model",
   "sessions.col.policy": "Policy",
-  "sessions.col.tokens": "Tokens",
+  "sessions.col.tokens": "Total tokens",
   "sessions.activeRequests": "{count} active",
   "sessions.source.gpt": "{count}GPT",
   "sessions.source.glm": "{count}GLM",

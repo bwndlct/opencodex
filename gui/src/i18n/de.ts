@@ -981,7 +981,7 @@ export const de = {
   "sessions.col.execution": "Ausführung",
   "sessions.col.model": "Modell",
   "sessions.col.policy": "Richtlinie",
-  "sessions.col.tokens": "Tokens",
+  "sessions.col.tokens": "Tokens gesamt",
   "sessions.activeRequests": "{count} aktiv",
   "sessions.source.gpt": "{count}GPT",
   "sessions.source.glm": "{count}GLM",
